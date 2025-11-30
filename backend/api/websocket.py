@@ -1,0 +1,33 @@
+from __future__ import annotations
+
+import json
+
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+from backend.core.orchestrator import orchestrator
+from backend.core.ws_manager import ws_manager
+
+router = APIRouter()
+
+
+@router.websocket("/ws/projects/{project_id}")
+async def project_socket(websocket: WebSocket, project_id: str) -> None:
+    await ws_manager.connect(project_id, websocket)
+    await websocket.send_json(
+        {"type": "info", "msg": "connected", "project_id": project_id}
+    )
+    try:
+        while True:
+            payload = await websocket.receive_text()
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if data.get("type") == "command" and data.get("command") == "stop":
+                await orchestrator.request_stop(project_id)
+                await websocket.send_json(
+                    {"type": "info", "msg": "stop requested", "project_id": project_id}
+                )
+    except WebSocketDisconnect:
+        await ws_manager.disconnect(project_id, websocket)
+

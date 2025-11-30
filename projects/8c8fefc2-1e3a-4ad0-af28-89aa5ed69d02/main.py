@@ -1,0 +1,1 @@
+from fastapi import FastAPI\n\napp = FastAPI()\n\nfrom fastapi.responses import JSONResponse\n\n@app.get('/')\nasync def read_root() -> JSONResponse:\n    return JSONResponse(content={'message': 'Hello World'}, media_type='application/json')

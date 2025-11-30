@@ -1,0 +1,204 @@
+import { FormEvent, useState } from "react";
+import Link from "next/link";
+import { soundManager } from "../utils/sound";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+
+const templates = [
+  {
+    title: "3D Snake Game",
+    description: "A classic Snake game built with Three.js and React. It should feature a 3D grid, a snake that grows when eating food, and score tracking.",
+    target: "web"
+  },
+  {
+    title: "FastAPI Backend",
+    description: "A robust REST API using FastAPI with SQLite database, Pydantic schemas, and JWT authentication.",
+    target: "api"
+  },
+  {
+    title: "React To-Do App",
+    description: "A modern To-Do application with drag-and-drop sorting, categories, and local storage persistence.",
+    target: "web"
+  }
+];
+
+export default function HomePage() {
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [target, setTarget] = useState<"web" | "api" | "telegram">("web");
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    setCreating(true);
+    soundManager.playClick();
+    
+    try {
+      const response = await fetch(`${API_BASE}/api/projects`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, description, target }),
+      });
+      if (!response.ok) {
+        setError("Failed to create project");
+        return;
+      }
+      const data = await response.json();
+      setProjectId(data.project_id);
+      soundManager.playSuccess();
+    } catch (e) {
+      setError("Failed to create project");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const fillTemplate = (t: typeof templates[0]) => {
+    soundManager.playHover();
+    setTitle(t.title);
+    setDescription(t.description);
+    setTarget(t.target as any);
+  };
+
+  return (
+    <div style={{ 
+      minHeight: "100vh", 
+      display: "flex", 
+      flexDirection: "column", 
+      alignItems: "center", 
+      justifyContent: "center",
+      padding: "2rem",
+      background: "radial-gradient(circle at center, #1a1a2e 0%, #000 100%)"
+    }}>
+      <main className="glass-panel" style={{ padding: "2rem", width: "100%", maxWidth: 800, borderRadius: "12px" }}>
+        <h1 style={{ 
+          textAlign: "center", 
+          marginBottom: "0.5rem", 
+          background: "linear-gradient(90deg, #fff, #aaa)", 
+          WebkitBackgroundClip: "text", 
+          WebkitTextFillColor: "transparent",
+          fontSize: "2.5rem"
+        }}>
+          AstraMind
+        </h1>
+        <p style={{ textAlign: "center", color: "#9ca3af", marginBottom: "2rem" }}>
+          Virtual AI Company: Describe your idea and let the agents build the MVP.
+        </p>
+        
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "1rem", marginBottom: "2rem" }}>
+          {templates.map((t, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => fillTemplate(t)}
+              onMouseEnter={() => soundManager.playHover()}
+              style={{
+                background: "rgba(255,255,255,0.05)",
+                border: "1px solid rgba(255,255,255,0.1)",
+                padding: "1rem",
+                borderRadius: "8px",
+                cursor: "pointer",
+                textAlign: "left",
+                transition: "all 0.2s"
+              }}
+            >
+              <div style={{ color: "#60a5fa", fontWeight: "bold", marginBottom: "0.5rem" }}>{t.title}</div>
+              <div style={{ fontSize: "0.8rem", color: "#9ca3af", lineHeight: 1.4 }}>
+                {t.description.length > 60 ? t.description.slice(0, 60) + "..." : t.description}
+              </div>
+            </button>
+          ))}
+        </div>
+
+        <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+          <div style={{ display: "flex", gap: "1rem" }}>
+            <input
+              type="text"
+              placeholder="Project Title"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              required
+              style={{ flex: 1 }}
+            />
+            <select 
+              value={target} 
+              onChange={(event) => setTarget(event.target.value as any)}
+              style={{ width: "120px" }}
+            >
+              <option value="web">Web</option>
+              <option value="api">API</option>
+              <option value="telegram">Telegram</option>
+            </select>
+          </div>
+          
+          <textarea
+            placeholder="Describe your project in detail..."
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            rows={6}
+            required
+            style={{ resize: "vertical" }}
+          />
+          
+          <button 
+            type="submit" 
+            disabled={creating}
+            style={{ 
+              padding: "1rem", 
+              fontSize: "1.1rem",
+              marginTop: "1rem"
+            }}
+          >
+            {creating ? "Initializing Agents..." : "Launch Project 🚀"}
+          </button>
+        </form>
+
+        {error && (
+          <div style={{ 
+            marginTop: "1.5rem", 
+            padding: "1rem", 
+            background: "rgba(239, 68, 68, 0.1)", 
+            border: "1px solid rgba(239, 68, 68, 0.2)", 
+            color: "#ef4444", 
+            borderRadius: "6px",
+            textAlign: "center"
+          }}>
+            {error}
+          </div>
+        )}
+
+        {projectId && (
+          <div style={{ 
+            marginTop: "1.5rem", 
+            padding: "1.5rem", 
+            background: "rgba(16, 185, 129, 0.1)", 
+            border: "1px solid rgba(16, 185, 129, 0.2)", 
+            borderRadius: "8px",
+            textAlign: "center"
+          }}>
+            <h3 style={{ color: "#10b981", marginTop: 0 }}>Project Created!</h3>
+            <p style={{ color: "#d1d5db", marginBottom: "1.5rem" }}>Your agents are ready to start working.</p>
+            <Link 
+              href={`/project/${projectId}`}
+              style={{ 
+                display: "inline-block",
+                background: "#10b981",
+                color: "white",
+                padding: "0.75rem 2rem",
+                borderRadius: "4px",
+                textDecoration: "none",
+                fontWeight: "bold"
+              }}
+              onClick={() => soundManager.playClick()}
+            >
+              Open Dashboard
+            </Link>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}

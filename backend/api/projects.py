@@ -1,0 +1,193 @@
+from __future__ import annotations
+
+import asyncio
+import mimetypes
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, List, Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.responses import FileResponse, PlainTextResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.agents.refactor import RefactorAgent
+from backend.core.orchestrator import orchestrator
+from backend.core.ws_manager import ws_manager
+from backend.memory import utils as db_utils
+from backend.memory.db import get_session_dependency
+from backend.memory.models import Project
+from backend.settings import get_settings
+from backend.utils import fileutils
+from backend.utils.logging import get_logger
+from backend.utils.schemas import (
+    FileEntry,
+    FileUpdate,
+    ProjectCreate,
+    ProjectStatusResponse,
+)
+from pydantic import BaseModel
+
+router = APIRouter(prefix="/api/projects", tags=["projects"])
+LOGGER = get_logger(__name__)
+refactor_agent = RefactorAgent()
+
+
+class ChatRequest(BaseModel):
+    message: str
+    history: Optional[List[Dict[str, str]]] = None
+
+
+def _project_path(project_id: UUID) -> Path:
+    settings = get_settings()
+    return settings.projects_root / str(project_id)
+
+
+@router.post("", status_code=status.HTTP_201_CREATED)
+async def create_project(
+    payload: ProjectCreate, session: AsyncSession = Depends(get_session_dependency)
+) -> dict:
+    project = Project(
+        title=payload.title,
+        description=payload.description,
+        target=payload.target,
+        status="creating",
+    )
+    session.add(project)
+    await session.commit()
+    await session.refresh(project)
+
+    settings = get_settings()
+    fileutils.ensure_project_dir(
+        settings.projects_root,
+        str(project.id),
+        {
+            "title": payload.title,
+            "description": payload.description,
+            "target": payload.target,
+        },
+    )
+
+    await orchestrator.async_start(
+        project.id, payload.title, payload.description, payload.target
+    )
+
+    return {"project_id": str(project.id), "status": "created"}
+
+
+@router.get("/{project_id}/status", response_model=ProjectStatusResponse)
+async def get_status(
+    project_id: UUID, session: AsyncSession = Depends(get_session_dependency)
+) -> ProjectStatusResponse:
+    project = await db_utils.get_project(session, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    tasks = await db_utils.list_tasks(session, project_id)
+    artifacts = await db_utils.list_artifacts(session, project_id)
+    return ProjectStatusResponse(
+        project_id=str(project.id),
+        status=project.status,  # type: ignore[arg-type]
+        steps=[
+            {
+                "id": str(task.id),
+                "name": task.name,
+                "agent": task.agent,
+                "status": task.status,
+                "parallel_group": task.parallel_group,
+                "payload": task.payload,
+            }
+            for task in tasks
+        ],
+        artifacts=[
+            {
+                "path": artifact.path,
+                "size_bytes": artifact.size_bytes,
+            }
+            for artifact in artifacts
+        ],
+    )
+
+
+@router.get("/{project_id}/files", response_model=List[FileEntry])
+async def list_files(project_id: UUID) -> List[FileEntry]:
+    project_path = _project_path(project_id)
+    if not project_path.exists():
+        raise HTTPException(status_code=404, detail="Project not found")
+    return fileutils.iter_file_entries(project_path)
+
+
+@router.get("/{project_id}/file")
+async def read_file(
+    project_id: UUID,
+    path: str = Query(...),
+    version: Optional[int] = Query(default=None),
+) -> Response:
+    project_path = _project_path(project_id)
+    full_path = project_path / path
+    try:
+        data, is_text = fileutils.read_project_file(project_path, path)
+    except FileNotFoundError as exc:  # noqa: BLE001
+        raise HTTPException(status_code=404, detail="File not found") from exc
+    if is_text:
+        return PlainTextResponse(data.decode("utf-8"))
+    return Response(
+        content=data, media_type="application/octet-stream", headers={"X-File": path}
+    )
+
+
+@router.post("/{project_id}/chat")
+async def chat_with_project(project_id: UUID, payload: ChatRequest) -> dict:
+    """Chat with the RefactorAgent to modify the project."""
+    response = await refactor_agent.chat(project_id, payload.message, payload.history)
+    return {"response": response}
+
+
+@router.get("/{project_id}/download")
+async def download_project(
+    project_id: UUID, version: Optional[int] = Query(default=None)
+) -> FileResponse:
+    project_path = _project_path(project_id)
+    if not project_path.exists():
+        raise HTTPException(status_code=404, detail="Project not found")
+    zip_path = fileutils.build_project_zip(project_path)
+    return FileResponse(
+        zip_path,
+        media_type="application/zip",
+        filename=f"project_{project_id}.zip",
+    )
+
+
+@router.post("/{project_id}/file")
+async def save_file(
+    project_id: UUID,
+    payload: FileUpdate,
+    session: AsyncSession = Depends(get_session_dependency),
+) -> dict:
+    project_path = _project_path(project_id)
+    if not project_path.exists():
+        raise HTTPException(status_code=404, detail="Project not found")
+    target = project_path / payload.path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(payload.content, encoding="utf-8")
+    size = target.stat().st_size
+    await db_utils.add_artifacts(session, project_id, [payload.path], [size])
+    await db_utils.record_event(
+        session,
+        project_id,
+        f"File {payload.path} saved",
+        agent="editor",
+    )
+    await ws_manager.broadcast(
+        str(project_id),
+        {
+            "type": "event",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "project_id": str(project_id),
+            "agent": "editor",
+            "level": "info",
+            "msg": f"File {payload.path} saved",
+            "artifact_path": payload.path,
+        },
+    )
+    return {"path": payload.path, "size_bytes": size}
