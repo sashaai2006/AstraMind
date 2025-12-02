@@ -16,6 +16,7 @@ build/
 frontend/src/.next/
 frontend/src/out/
 frontend/src/node_modules/
+**/node_modules/
 
 # Database
 backend/data.db
