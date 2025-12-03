@@ -46,6 +46,7 @@ class DeveloperAgent:
         step: Dict[str, Any],
         context: Dict[str, Any],
         stop_event,
+        on_message: Optional[Any] = None,
     ) -> None:
         """Fast mode: generate code without review (default)."""
         project_id = context["project_id"]
@@ -53,10 +54,21 @@ class DeveloperAgent:
             LOGGER.info("Project %s stop requested; skipping step.", project_id)
             return
 
+        step_name = step.get("name", "unknown")
         payload = step.get("payload", {})
         files_spec = payload.get("files", [])
         
-        await self._broadcast_thought(project_id, f"Analyzing specs for step: {step.get('name')}...")
+        await self._broadcast_thought(project_id, f"Analyzing specs for step: {step_name}...")
+        
+        # Simulate inter-agent communication for visualization
+        if on_message:
+            if "frontend" in step_name:
+                await on_message("generate_backend", "Requesting API schema...")
+            elif "backend" in step_name:
+                await on_message("generate_frontend", "API schema ready.")
+            else:
+                await on_message("ceo", "Reporting progress...")
+
         await self._broadcast_thought(project_id, "Generating code (fast mode)...")
 
         # Generate each file independently to avoid output token limits
@@ -86,7 +98,11 @@ class DeveloperAgent:
                 file_defs.append(result)
 
         await self._save_files(project_id, step, file_defs)
-        await self._broadcast_thought(project_id, f"Step '{step.get('name')}' completed successfully.")
+        
+        if on_message:
+             await on_message("ceo", "Task completed.")
+             
+        await self._broadcast_thought(project_id, f"Step '{step_name}' completed successfully.")
 
     async def _generate_single_file(
         self,
@@ -95,12 +111,20 @@ class DeveloperAgent:
         step: Dict[str, Any],
         stop_event,
     ) -> Dict[str, str]:
-        """Generate a single file using the LLM."""
+        """Generate a single file using the LLM or Turbo Templates."""
         if stop_event.is_set():
             raise asyncio.CancelledError()
 
         project_id = context["project_id"]
         path_value = spec.get("path", "unknown_artifact.txt")
+
+        # --- TURBO TEMPLATES START ---
+        # Instant return for common config files
+        turbo_content = self._get_turbo_template(path_value)
+        if turbo_content:
+            await self._broadcast_thought(project_id, f"Using Turbo Template for {path_value} (Instant)", "info")
+            return {"path": path_value, "content": turbo_content}
+        # --- TURBO TEMPLATES END ---
 
         prompt = self._build_prompt(context, step, [spec])
         parsed_response = await self._execute_with_retry(prompt, step, context)
@@ -116,6 +140,98 @@ class DeveloperAgent:
             if file_def["path"] == path_value:
                 return file_def
         return file_defs[0]
+
+    def _get_turbo_template(self, path: str) -> Optional[str]:
+        """Return pre-defined content for standard files."""
+        p = Path(path)
+        name = p.name
+        
+        # TS Config
+        if name == "tsconfig.json":
+            return json.dumps({
+                "compilerOptions": {
+                    "target": "es5",
+                    "lib": ["dom", "dom.iterable", "esnext"],
+                    "allowJs": true,
+                    "skipLibCheck": true,
+                    "strict": true,
+                    "forceConsistentCasingInFileNames": true,
+                    "noEmit": true,
+                    "esModuleInterop": true,
+                    "module": "esnext",
+                    "moduleResolution": "node",
+                    "resolveJsonModule": true,
+                    "isolatedModules": true,
+                    "jsx": "preserve",
+                    "incremental": true,
+                    "plugins": [{"name": "next"}],
+                    "paths": {"@/*": ["./*"]}
+                },
+                "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+                "exclude": ["node_modules"]
+            }, indent=2)
+
+        # Gitignore
+        if name == ".gitignore":
+            return (
+                "# dependencies\n/node_modules\n/.pnp\n.pnp.js\n\n"
+                "# testing\n/coverage\n\n"
+                "# next.js\n/.next/\n/out/\n\n"
+                "# production\n/build\n\n"
+                "# misc\n.DS_Store\n*.pem\n\n"
+                "# debug\nnpm-debug.log*\nyarn-debug.log*\nyarn-error.log*\n\n"
+                "# local env files\n.env*.local\n.env\n\n"
+                "# vercel\n.vercel"
+            )
+            
+        # PostCSS
+        if name == "postcss.config.js":
+            return 'module.exports = {\n  plugins: {\n    tailwindcss: {},\n    autoprefixer: {},\n  },\n}'
+
+        # Tailwind Config
+        if name in ["tailwind.config.ts", "tailwind.config.js"]:
+            return (
+                'import type { Config } from "tailwindcss";\n\n'
+                'const config: Config = {\n'
+                '  content: [\n'
+                '    "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",\n'
+                '    "./src/components/**/*.{js,ts,jsx,tsx,mdx}",\n'
+                '    "./src/app/**/*.{js,ts,jsx,tsx,mdx}",\n'
+                '  ],\n'
+                '  theme: {\n'
+                '    extend: {\n'
+                '      backgroundImage: {\n'
+                '        "gradient-radial": "radial-gradient(var(--tw-gradient-stops))",\n'
+                '        "gradient-conic": "conic-gradient(from 180deg at 50% 50%, var(--tw-gradient-stops))",\n'
+                '      },\n'
+                '    },\n'
+                '  },\n'
+                '  plugins: [],\n'
+                '};\n'
+                'export default config;'
+            )
+
+        # README (Generic)
+        if name == "README.md":
+            return (
+                "# Generated Project\n\n"
+                "This project was automatically generated by AstraMind AI.\n\n"
+                "## Getting Started\n\n"
+                "1. Install dependencies:\n   ```bash\n   npm install\n   # or\n   yarn install\n   ```\n\n"
+                "2. Run the development server:\n   ```bash\n   npm run dev\n   # or\n   yarn dev\n   ```\n\n"
+                "Open [http://localhost:3000](http://localhost:3000) with your browser to see the result."
+            )
+            
+        # Next Config
+        if name == "next.config.js":
+            return '/** @type {import("next").NextConfig} */\nconst nextConfig = {\n  reactStrictMode: true,\n};\n\nmodule.exports = nextConfig;'
+
+        # ESLint
+        if name == ".eslintrc.json":
+            return json.dumps({"extends": "next/core-web-vitals"}, indent=2)
+
+        return None
+
 
     async def _save_files(self, project_id: str, step: Dict[str, Any], file_defs: List[Dict[str, str]]) -> None:
         """Save files to disk and record artifacts."""

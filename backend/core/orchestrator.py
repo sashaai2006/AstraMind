@@ -117,24 +117,44 @@ class Orchestrator:
             )
             await self._mark_failed(project_id, "internal_error")
 
+    async def broadcast_message(self, project_id: UUID, source: str, target: str, message: str) -> None:
+        """Broadcast an inter-agent communication event."""
+        await self._emit_event(
+            project_id,
+            f"Message from {source} to {target}: {message}",
+            agent=source,
+            level="info",
+            data={
+                "type": "communication",
+                "source": source,
+                "target": target,
+                "message": message
+            }
+        )
+
     async def _run_step(
         self, step: Dict[str, Any], context: Dict[str, Any], stop_event: asyncio.Event
     ) -> None:
         project_id = UUID(context["project_id"])
         task_id = UUID(step.get("id") or str(uuid4()))
+        step_name = step.get("name", "unknown")
         
+        # Callback for agents to send messages
+        async def on_message(target: str, msg: str) -> None:
+            await self.broadcast_message(project_id, step_name, target, msg)
+
         # Optimized: Update task status and record event in ONE transaction
         async with get_session() as session:
             await db_utils.update_task_and_record_event(
                 session,
                 project_id=project_id,
                 task_id=task_id,
-                name=step.get("name", "unknown"),
+                name=step_name,
                 agent=step.get("agent", "developer"),
                 status="running",
                 parallel_group=step.get("parallel_group"),
                 payload=step.get("payload", {}),
-                event_message=f"Step {step.get('name')} started",
+                event_message=f"Step {step_name} started",
             )
         
         # Must broadcast manually since we bypassed _emit_event
@@ -146,13 +166,14 @@ class Orchestrator:
                 "project_id": str(project_id),
                 "agent": step.get("agent", "developer"),
                 "level": "info",
-                "msg": f"Step {step.get('name')} started",
+                "msg": f"Step {step_name} started",
             },
         )
 
         status = "running"  # Default status in case of cancellation
         try:
-            await self._developer.run(step, context, stop_event)
+            # Pass the callback to the agent
+            await self._developer.run(step, context, stop_event, on_message=on_message)
             status = "done"
             
             # Optimized: Update task status and record event in ONE transaction

@@ -286,7 +286,7 @@ export default function ProjectPage() {
             ) : (
             <div style={{ height: "calc(100vh - 140px)", display: "grid", gridTemplateColumns: "1fr 320px", gap: "1rem" }}>
               <div style={{ height: "100%", overflow: "hidden" }}>
-                <DAGView steps={steps} />
+                <DAGView steps={steps} lastEvent={logs.length > 0 ? logs[logs.length - 1] : undefined} />
               </div>
               <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
                   <h3 style={{ fontSize: "0.9rem", margin: "0 0 0.5rem 0", textTransform: "uppercase", color: "#9ca3af", letterSpacing: "1px" }}>Live Logs</h3>

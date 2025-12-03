@@ -5,6 +5,8 @@
     "dev": "cd frontend/src && npm run dev",
     "frontend": "cd frontend/src && npm run dev",
     "backend": "uvicorn backend.main:app --reload"
+  },
+  "dependencies": {
+    "dagre": "^0.8.5"
   }
 }
-

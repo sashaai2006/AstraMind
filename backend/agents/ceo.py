@@ -22,27 +22,48 @@ class CEOAgent:
 
     async def _llm_plan(self, description: str, target: str) -> List[Dict[str, Any]]:
         prompt = (
-            "You are a technical CEO planning an MVP project.\n"
+            "You are a technical CEO planning an MVP project. Your goal is to architect a scalable system.\n"
             f"Project description: {description}\n"
             f"Target platform: {target}\n"
-            "Create a JSON plan consisting of a list of steps. Each step must have:\n"
-            '- "name": string (e.g. "scaffold_frontend")\n'
-            '- "agent": "developer"\n'
-            '- "parallel_group": string or null (steps with same group run in parallel)\n'
-            '- "payload": { "files": [ { "path": "path/to/file", "content": "DETAILED INSTRUCTIONS for developer on how to implement this file..." } ] }\n'
             "\n"
-            "CRITICAL: In the 'content' field of 'payload', do NOT write code. Write DETAILED instructions in natural language explaining what logic the developer agent should implement in that file. This ensures that if the developer fails, we at least have the spec.\n"
+            "Create a JSON execution plan. Break the project into independent parallel tracks where possible (e.g., 'frontend', 'backend', 'database').\n"
+            "Output a JSON object with the following structure:\n"
+            "{\n"
+            '  "_thought": "Explain your reasoning for the plan and parallelization strategy...",\n'
+            '  "steps": [\n'
+            '    {\n'
+            '      "name": "string (e.g. \'scaffold_frontend\', \'setup_database\')",'
+            '      "agent": "developer",'
+            '      "parallel_group": "string or null (steps with same group run in parallel)",'
+            '      "payload": { "files": [ { "path": "path/to/file", "content": "DETAILED INSTRUCTIONS..." } ] }\n'
+            '    }\n'
+            '  ]\n'
+            "}\n"
             "\n"
-            "Return ONLY valid JSON list of steps. Do not include markdown code blocks."
+            "RULES:\n"
+            "1. MAXIMIZE PARALLELISM: Put frontend and backend tasks in the same 'parallel_group' (e.g., 'phase_1').\n"
+            "2. DETAILED SPECS: In 'payload.files.content', write DETAILED natural language instructions. Do NOT write code.\n"
+            "3. Return ONLY valid JSON. No markdown formatting."
         )
         adapter = get_llm_adapter()
         try:
             LOGGER.info("CEO requesting plan from LLM...")
-            response = await adapter.acomplete(prompt)
+            response = await adapter.acomplete(prompt, json_mode=True)
             LOGGER.info("CEO received plan (len=%d)", len(response))
-            # Simple cleanup if LLM wraps in markdown
-            cleaned = response.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-            steps = json.loads(cleaned)
+            
+            # Parse response
+            data = json.loads(response)
+            
+            # Handle Thought Streaming if present
+            if "_thought" in data:
+                # Ideally we would broadcast this, but CEO doesn't have WS manager context yet.
+                # We'll log it for now.
+                LOGGER.info("CEO Thought: %s", data["_thought"])
+                
+            steps = data.get("steps", [])
+            if isinstance(data, list): # Fallback if LLM returned list directly
+                steps = data
+
             # Ensure IDs
             for step in steps:
                 if "id" not in step:
