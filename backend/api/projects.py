@@ -49,6 +49,57 @@ def _project_path(project_id: UUID) -> Path:
     return settings.projects_root / str(project_id)
 
 
+@router.get("")
+async def list_projects(
+    session: AsyncSession = Depends(get_session_dependency),
+    limit: int = Query(default=50, le=100),
+    offset: int = Query(default=0, ge=0),
+    search: Optional[str] = Query(default=None),
+) -> dict:
+    """List all projects with optional search and pagination."""
+    from sqlalchemy import select, or_, func
+    
+    query = select(Project)
+    
+    # Search filter
+    if search:
+        search_pattern = f"%{search}%"
+        query = query.where(
+            or_(
+                Project.title.ilike(search_pattern),
+                Project.description.ilike(search_pattern),
+            )
+        )
+    
+    # Count total
+    count_query = select(func.count()).select_from(query.subquery())
+    result = await session.execute(count_query)
+    total = result.scalar() or 0
+    
+    # Apply pagination and ordering
+    query = query.order_by(Project.created_at.desc()).limit(limit).offset(offset)
+    
+    result = await session.execute(query)
+    projects = result.scalars().all()
+    
+    return {
+        "projects": [
+            {
+                "id": str(p.id),
+                "title": p.title,
+                "description": p.description,
+                "target": p.target,
+                "status": p.status,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+            }
+            for p in projects
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_project(
     payload: ProjectCreate, session: AsyncSession = Depends(get_session_dependency)
