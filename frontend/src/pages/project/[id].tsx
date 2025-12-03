@@ -32,6 +32,9 @@ export default function ProjectPage() {
   const [steps, setSteps] = useState<Step[]>([]);
   const [status, setStatus] = useState<string>("");
   const [chatHistory, setChatHistory] = useState<Message[]>([]);
+  const [runOutput, setRunOutput] = useState<string>("");
+  const [isRunning, setIsRunning] = useState(false);
+  const [runUrl, setRunUrl] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<"editor" | "dag">("editor");
   
@@ -134,6 +137,34 @@ export default function ProjectPage() {
   };
 
 
+  // Handle Run Project
+  const handleRun = async () => {
+    if (!projectId) return;
+    soundManager.playClick();
+    setIsRunning(true);
+    setRunOutput("Starting server...\n");
+    
+    try {
+      const response = await fetch(`${API_BASE}/api/projects/${projectId}/run`, {
+        method: "POST",
+      });
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        setRunUrl(result.url);
+        setRunOutput(`✅ Server started!\n\nURL: ${result.url}\nPort: ${result.port}\n\nOpen in new tab to view your project.`);
+        soundManager.playSuccess();
+      } else {
+        setRunOutput(`❌ Failed to start:\n${result.error}`);
+        setIsRunning(false);
+      }
+    } catch (e) {
+      setRunOutput(`❌ Error: ${e}`);
+      setIsRunning(false);
+    }
+  };
+
   // Handle Deep Review request
   const handleDeepReview = async () => {
     if (!projectId || !selectedFile) return;
@@ -226,6 +257,7 @@ export default function ProjectPage() {
                     language={selectedFile ? languageFromPath(selectedFile) : "plaintext"}
                     onSave={handleSave}
                     onDeepReview={handleDeepReview}
+                    onRun={handleRun}
                   />
                 </div>
                 
@@ -286,6 +318,42 @@ export default function ProjectPage() {
                        <LogPanel events={logs} />
                     </div>
                   </div>
+
+                  {/* Run Output */}
+                  {runOutput && (
+                    <div className="glass-panel" style={{ padding: "1rem", borderRadius: "8px", maxHeight: "200px", overflowY: "auto" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+                        <h3 style={{ fontSize: "0.75rem", margin: 0, textTransform: "uppercase", color: "#9ca3af", letterSpacing: "1px" }}>
+                          🖥️ Output
+                        </h3>
+                        {runUrl && (
+                          <a
+                            href={runUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                              fontSize: "0.8rem",
+                              color: "#10b981",
+                              textDecoration: "underline",
+                              cursor: "pointer"
+                            }}
+                            onClick={() => soundManager.playClick()}
+                          >
+                            Open →
+                          </a>
+                        )}
+                      </div>
+                      <pre style={{ 
+                        margin: 0, 
+                        fontSize: "0.75rem", 
+                        color: "#d1d5db", 
+                        whiteSpace: "pre-wrap",
+                        fontFamily: "monospace"
+                      }}>
+                        {runOutput}
+                      </pre>
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (
