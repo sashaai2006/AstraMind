@@ -31,6 +31,7 @@ export default function ProjectPage() {
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [steps, setSteps] = useState<Step[]>([]);
   const [status, setStatus] = useState<string>("");
+  const [chatHistory, setChatHistory] = useState<Message[]>([]);
 
   const [activeTab, setActiveTab] = useState<"editor" | "dag">("editor");
   
@@ -132,22 +133,6 @@ export default function ProjectPage() {
     return data.response;
   };
 
-  // Handle auto-fix request
-  const handleFix = async () => {
-    if (!selectedFile || !fileContent) return;
-    
-    const prompt = `I am having trouble with this file: ${selectedFile}.\n\nContent:\n${fileContent}\n\nPlease analyze it for errors (syntax, logic, or best practices) and fix them. Return the corrected file content.`;
-    
-    soundManager.playClick();
-    
-    try {
-        const history: Message[] = [{ role: "user", content: prompt }];
-        await handleChat(prompt, history);
-        soundManager.playSuccess();
-    } catch (e) {
-        console.error(e);
-    }
-  };
 
   // Handle Deep Review request
   const handleDeepReview = async () => {
@@ -232,51 +217,71 @@ export default function ProjectPage() {
           </div>
 
           {activeTab === "editor" ? (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: "1rem", height: "calc(100vh - 140px)", overflow: "hidden" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 500px", gap: "1rem", height: "calc(100vh - 140px)", overflow: "hidden" }}>
+              {/* Left: Editor */}
               <div style={{ height: "100%", overflow: "hidden" }}>
                   <Editor
                     path={selectedFile}
                     content={fileContent}
                     language={selectedFile ? languageFromPath(selectedFile) : "plaintext"}
                     onSave={handleSave}
-                    onFix={handleFix}
                     onDeepReview={handleDeepReview}
                   />
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-                  <div style={{ flex: 1, minHeight: "300px", display: "flex", flexDirection: "column" }}>
-                     <h3 style={{ fontSize: "0.9rem", margin: "0 0 0.5rem 0", textTransform: "uppercase", color: "#9ca3af", letterSpacing: "1px" }}>AI Assistant</h3>
-                     <ChatPanel onSendMessage={handleChat} />
+                
+                {/* Right: Chat (Center of attention) + Actions */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "1rem", height: "100%" }}>
+                  {/* Chat takes most space */}
+                  <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                     <ChatPanel 
+                       onSendMessage={handleChat} 
+                       selectedFile={selectedFile}
+                       messages={chatHistory}
+                       onMessagesChange={setChatHistory}
+                     />
                   </div>
                   
-                  <div className="glass-panel" style={{ padding: "1rem", borderRadius: "8px" }}>
-                    <h3 style={{ marginTop: 0, fontSize: "0.9rem", textTransform: "uppercase", color: "#9ca3af", letterSpacing: "1px" }}>Actions</h3>
-                    <div style={{ marginTop: "0.5rem" }}>
+                  {/* Compact actions panel */}
+                  <div className="glass-panel" style={{ padding: "0.75rem", borderRadius: "8px" }}>
+                    <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
                       <a
                         href={downloadHref || "#"}
                         style={{ 
-                          display: "block", 
+                          flex: 1,
                           textAlign: "center",
-                          padding: "0.6rem",
-                          background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
+                          padding: "0.5rem",
+                          background: downloadHref ? "linear-gradient(135deg, #10b981 0%, #059669 100%)" : "rgba(55, 65, 81, 0.5)",
                           color: "white",
                           borderRadius: "6px",
                           pointerEvents: downloadHref ? "auto" : "none", 
-                          opacity: downloadHref ? 1 : 0.5,
                           textDecoration: "none",
+                          fontSize: "0.85rem",
                           fontWeight: "bold",
-                          boxShadow: "0 4px 10px rgba(16, 185, 129, 0.3)"
+                          border: "1px solid rgba(255,255,255,0.1)"
                         }}
                         download
                         onClick={() => soundManager.playClick()}
                       >
-                        Download ZIP
+                        📦 ZIP
                       </a>
+                      <div style={{ 
+                        flex: 1,
+                        textAlign: "center",
+                        padding: "0.5rem",
+                        background: "rgba(168, 85, 247, 0.2)",
+                        color: "#c4b5fd",
+                        borderRadius: "6px",
+                        fontSize: "0.85rem",
+                        border: "1px solid rgba(168, 85, 247, 0.3)"
+                      }}>
+                        {status.toUpperCase()}
+                      </div>
                     </div>
                   </div>
                   
-                  <div style={{ height: "200px", display: "flex", flexDirection: "column" }}>
-                    <h3 style={{ fontSize: "0.9rem", margin: "0 0 0.5rem 0", textTransform: "uppercase", color: "#9ca3af", letterSpacing: "1px" }}>Live Logs</h3>
+                  {/* Compact logs */}
+                  <div style={{ height: "150px", display: "flex", flexDirection: "column" }}>
+                    <h3 style={{ fontSize: "0.75rem", margin: "0 0 0.5rem 0", textTransform: "uppercase", color: "#9ca3af", letterSpacing: "1px" }}>Live Logs</h3>
                     <div style={{ flex: 1, overflow: "hidden" }}>
                        <LogPanel events={logs} />
                     </div>

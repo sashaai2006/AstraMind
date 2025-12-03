@@ -10,11 +10,10 @@ type Props = {
   content: string;
   language: string;
   onSave: (nextContent: string) => Promise<void>;
-  onFix?: () => void;
   onDeepReview?: () => void;
 };
 
-const Editor: React.FC<Props> = ({ path, content, language, onSave, onFix, onDeepReview }) => {
+const Editor: React.FC<Props> = ({ path, content, language, onSave, onDeepReview }) => {
   const [value, setValue] = useState(content);
   const [saving, setSaving] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -111,20 +110,6 @@ const Editor: React.FC<Props> = ({ path, content, language, onSave, onFix, onDee
                     }}
                 >
                   {reviewing ? "🔍 Reviewing..." : "🔍 Deep Review"}
-                </button>
-            )}
-            {onFix && (
-                <button 
-                    type="button" 
-                    onClick={onFix} 
-                    title="Auto-fix bugs in this file"
-                    style={{
-                        background: "rgba(239, 68, 68, 0.2)",
-                        color: "#fca5a5",
-                        border: "1px solid rgba(239, 68, 68, 0.3)"
-                    }}
-                >
-                  🚑 Fix It
                 </button>
             )}
             <button type="button" onClick={handleSave} disabled={saving}>

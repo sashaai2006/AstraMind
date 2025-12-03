@@ -45,29 +45,68 @@ class RefactorAgent:
         if not project_path.exists():
             return "Project not found."
 
+        # Detect intent from natural language
+        intent = self._detect_intent(message)
+        await self._broadcast_thought(str(project_id), f"Understanding request: {intent}...")
+
         context_files = self._read_context_files(project_path, user_query=message)
-        await self._broadcast_thought(str(project_id), "Reading context files...")
+        await self._broadcast_thought(str(project_id), "Reading relevant files...")
         
-        prompt = self._build_chat_prompt(message, context_files, history or [])
+        prompt = self._build_chat_prompt(message, context_files, history or [], intent)
 
         LOGGER.info("RefactorAgent calling LLM for project %s", project_id)
         await self._broadcast_thought(str(project_id), "Thinking about your request...")
         
-        # Use native JSON mode if available
-        response = await self._adapter.acomplete(prompt, json_mode=True)
+        # Try with JSON mode first
+        max_retries = 2
+        updates = None
+        last_error = None
         
-        LOGGER.info("RefactorAgent raw response length: %d", len(response))
-        # Log first 500 chars to see start of response
-        LOGGER.info("RefactorAgent raw response start: %s", response[:500])
+        for attempt in range(max_retries):
+            try:
+                # Use native JSON mode if available
+                response = await self._adapter.acomplete(prompt, json_mode=True)
+                
+                LOGGER.info("RefactorAgent attempt %d: raw response length: %d", attempt + 1, len(response))
+                LOGGER.info("RefactorAgent raw response start: %s", response[:500])
 
-        try:
-            updates = clean_and_parse_json(response)
-            if not isinstance(updates, dict):
-                raise ValueError("Parsed JSON is not a dictionary")
-        except Exception as exc:
-            LOGGER.error("Failed to parse RefactorAgent response: %s. Raw start: %s", exc, response[:500])
-            await self._broadcast_thought(str(project_id), f"Failed to parse LLM response: {exc}", "error")
-            return f"I failed to process the request. The LLM response was invalid JSON. Error: {exc}. Please try again."
+                updates = clean_and_parse_json(response)
+                if not isinstance(updates, dict):
+                    raise ValueError("Parsed JSON is not a dictionary")
+                
+                # Success!
+                break
+                
+            except Exception as exc:
+                last_error = exc
+                LOGGER.warning("RefactorAgent attempt %d failed: %s", attempt + 1, exc)
+                
+                if attempt < max_retries - 1:
+                    # Retry with a stricter prompt
+                    await self._broadcast_thought(str(project_id), f"Retrying (attempt {attempt + 2}/{max_retries})...", "warning")
+                    prompt = (
+                        "CRITICAL ERROR: Your previous response was not valid JSON.\n"
+                        "You MUST respond with ONLY a JSON object. No text before or after.\n"
+                        "Start with { and end with }.\n"
+                        "\n"
+                        f"Original request: {message}\n"
+                        "\n"
+                        "Respond ONLY with this exact structure:\n"
+                        '{\n'
+                        '  "_thought": "your reasoning here",\n'
+                        '  "message": "brief summary",\n'
+                        '  "files": [{"path": "...", "content": "..."}]\n'
+                        '}\n'
+                    )
+        
+        if updates is None:
+            LOGGER.error("RefactorAgent failed after %d attempts: %s", max_retries, last_error)
+            await self._broadcast_thought(str(project_id), f"Failed to get valid response from AI", "error")
+            return (
+                "I'm having trouble understanding the request. "
+                "Could you rephrase it more specifically? "
+                "For example: 'Add error handling to index.py' or 'Create a new file utils.js with helper functions'."
+            )
 
         # Log thought if present (Chain-of-Thought)
         if "_thought" in updates:
@@ -84,10 +123,12 @@ class RefactorAgent:
         if files_to_update:
             try:
                 await self._broadcast_thought(str(project_id), f"Applying changes to {len(files_to_update)} files...")
-                saved = write_files(project_path, files_to_update)
+                # Resolve to absolute path to avoid relative/absolute path conflicts
+                project_root = project_path.resolve()
+                saved = write_files(project_root, files_to_update)
                 # Update artifacts in DB
                 sizes = [s.stat().st_size for s in saved]
-                relative_paths = [s.relative_to(project_path).as_posix() for s in saved]
+                relative_paths = [s.relative_to(project_root).as_posix() for s in saved]
                 
                 async with get_session() as session:
                     await db_utils.add_artifacts(
@@ -126,7 +167,7 @@ class RefactorAgent:
         return response_message
 
     def _read_context_files(self, project_path: Path, user_query: str = "") -> str:
-        """Read text files to provide context to LLM with smart selection."""
+        """Read text files to provide context to LLM with smart selection (LIGHT MODE)."""
         entries = iter_file_entries(project_path)
         
         # Scoring function
@@ -135,24 +176,24 @@ class RefactorAgent:
             path_str = entry.path.lower()
             query_terms = user_query.lower().split()
             
-            # Match terms in query
+            # Match terms in query (high priority)
             for term in query_terms:
                 if len(term) > 3 and term in path_str:
-                    score += 10
+                    score += 20  # Increased from 10
             
             # Prioritize source code
-            if path_str.endswith(('.py', '.tsx', '.ts', '.js', '.html', '.css')):
+            if path_str.endswith(('.py', '.tsx', '.ts', '.js', '.html', '.css', '.cs')):  # Added .cs for C#
                 score += 5
             elif path_str.endswith('.json') or path_str.endswith('.md'):
-                score += 2
+                score += 1  # Reduced from 2
             else:
-                score -= 5 # Lockfiles, maps, etc.
+                score -= 10  # Increased penalty for irrelevant files
                 
-            # Penalty for size
-            if entry.size_bytes > 10000:
-                score -= 2
-            if entry.size_bytes > 50000:
-                score -= 10
+            # Strong penalty for size
+            if entry.size_bytes > 5000:  # Reduced threshold
+                score -= 5
+            if entry.size_bytes > 20000:  # More aggressive
+                score -= 20
                 
             return score
 
@@ -161,14 +202,23 @@ class RefactorAgent:
         
         buffer = []
         total_chars = 0
-        MAX_CHARS = 25000 # Approximate limit for context window
+        MAX_CHARS = 15000  # Reduced from 25000 for faster responses
+        MAX_FILES = 5  # Limit number of files for speed
 
+        files_included = 0
         for entry in sorted_entries:
             if entry.is_dir:
                 continue
             
+            if files_included >= MAX_FILES:
+                break
+            
             # Hard skip very large files
-            if entry.size_bytes > 100000:
+            if entry.size_bytes > 50000:  # Reduced from 100000
+                continue
+            
+            # Skip low-score files entirely
+            if score_entry(entry) < 0:
                 continue
             
             try:
@@ -177,55 +227,154 @@ class RefactorAgent:
                     text = content.decode("utf-8")
                     
                     # Skip map files and lock files content unless explicitly asked
-                    if ("lock" in entry.path or entry.path.endswith(".map")) and score_entry(entry) < 5:
-                        buffer.append(f"--- FILE: {entry.path} (skipped content) ---")
+                    if ("lock" in entry.path or entry.path.endswith(".map") or "node_modules" in entry.path):
                         continue
 
                     if total_chars + len(text) > MAX_CHARS:
-                        buffer.append(f"--- FILE: {entry.path} (truncated) ---\n[Content skipped due to size limit]")
+                        # Truncate instead of skipping completely
+                        remaining = MAX_CHARS - total_chars
+                        if remaining > 500:  # At least show something
+                            buffer.append(f"--- FILE: {entry.path} (truncated) ---\n{text[:remaining]}...")
+                            files_included += 1
+                        break
                     else:
                         buffer.append(f"--- FILE: {entry.path} ---\n{text}")
                         total_chars += len(text)
+                        files_included += 1
             except Exception:
                 pass
         
+        if not buffer:
+            return "--- No relevant files found in project ---"
+        
         return "\n\n".join(buffer)
 
-    def _build_chat_prompt(self, user_message: str, context_files: str, history: List[Dict[str, str]]) -> str:
+    def _detect_intent(self, message: str) -> str:
+        """Detect user intent from natural language."""
+        msg_lower = message.lower()
+        
+        # Convert/Rewrite intent
+        if any(word in msg_lower for word in ['перепиши', 'rewrite', 'convert', 'change to', 'make it', 'в c#', 'на c#', 'to c#', 'in c#']):
+            # Detect target language
+            if 'c#' in msg_lower or 'csharp' in msg_lower:
+                return "convert to C#"
+            elif 'python' in msg_lower or 'py' in msg_lower:
+                return "convert to Python"
+            elif 'java' in msg_lower:
+                return "convert to Java"
+            elif 'go' in msg_lower or 'golang' in msg_lower:
+                return "convert to Go"
+            elif 'rust' in msg_lower:
+                return "convert to Rust"
+            else:
+                return "refactor code"
+        
+        # Fix/Debug intent
+        if any(word in msg_lower for word in ['fix', 'исправь', 'debug', 'ошибка', 'error', 'bug', 'broken', 'не работает']):
+            return "fix bugs"
+        
+        # Optimize intent
+        if any(word in msg_lower for word in ['optimize', 'faster', 'speed', 'performance', 'оптимизируй', 'ускорь']):
+            return "optimize code"
+        
+        # Explain intent
+        if any(word in msg_lower for word in ['explain', 'what', 'how', 'why', 'объясни', 'как работает', 'что делает']):
+            return "explain code"
+        
+        # Add feature intent
+        if any(word in msg_lower for word in ['add', 'create', 'new', 'добавь', 'создай', 'сделай']):
+            return "add new feature"
+        
+        # Test intent
+        if any(word in msg_lower for word in ['test', 'tests', 'unit test', 'тест']):
+            return "add tests"
+        
+        # Document intent
+        if any(word in msg_lower for word in ['document', 'docs', 'comment', 'документ', 'комментарий']):
+            return "add documentation"
+        
+        # Default
+        return "modify code"
+
+    def _build_chat_prompt(self, user_message: str, context_files: str, history: List[Dict[str, str]], intent: str = "modify code") -> str:
         history_text = ""
         if history:
-            history_text = "Conversation History:\n"
-            for msg in history[-5:]: # Limit to last 5 messages to save tokens
+            history_text = "Previous Conversation:\n"
+            for msg in history[-5:]:
                 role = msg.get("role", "unknown")
                 content = msg.get("content", "")
-                history_text += f"- {role}: {content}\n"
+                history_text += f"{'User' if role == 'user' else 'You'}: {content}\n"
             history_text += "\n"
 
+        # Build intent-specific guidance
+        intent_guidance = {
+            "convert to C#": (
+                "The user wants to CONVERT existing code to C#. You must:\n"
+                "1. Create new .cs files with C# syntax (using System; namespace; public class)\n"
+                "2. Create a .csproj file if needed\n"
+                "3. Use C# conventions (PascalCase, proper types, LINQ where appropriate)\n"
+                "4. Keep the same logic but adapt to C# idioms\n"
+            ),
+            "convert to Python": "Convert code to Python (.py files, snake_case, proper indentation)",
+            "fix bugs": "Analyze code for syntax/logic errors and fix them. Keep original language.",
+            "optimize code": "Improve performance, remove redundant code, use better algorithms",
+            "explain code": "Return detailed explanation in 'message' field. Set 'files' to empty array [].",
+            "add new feature": "Create new files or modify existing ones to add the requested functionality",
+            "add tests": "Create test files (e.g., test_*.py, *.test.js) with unit tests",
+            "add documentation": "Add comments, docstrings, and README updates",
+        }
+        
+        guidance = intent_guidance.get(intent, "Understand the request and make appropriate changes")
+
         return (
-            "You are an expert software developer AI. You modify project files to fulfill user requests.\n"
-            "Below are the current project files:\n"
+            "You are an expert AI coding assistant like ChatGPT. You understand natural human language.\n"
+            "\n"
+            f"**Detected Intent:** {intent}\n"
+            f"**What to Do:** {guidance}\n"
+            "\n"
+            "**Available Project Files:**\n"
             f"{context_files}\n"
             "\n"
             f"{history_text}"
-            "User Request:\n"
-            f"{user_message}\n"
+            "**User Said:**\n"
+            f'"{user_message}"\n'
             "\n"
-            "CRITICAL INSTRUCTIONS:\n"
-            "1. First, THINK about the changes needed. Put your reasoning in the '_thought' field.\n"
-            "2. You MUST return the FULL content of the modified/new files in the 'files' array.\n"
-            "3. Return ONLY a valid JSON object. No markdown code blocks.\n"
-            "4. IMPORTANT: For JSON string values, use ONLY double quotes (\"). Do NOT use backticks (`) or single quotes (').\n"
-            "5. CRITICAL: If you write code (like JavaScript or GLSL shaders) inside the JSON 'content' string, you MUST escape all newlines as \\n. \n"
-            "   Example INCORRECT: \"content\": \"var x = 1;\nvar y = 2;\"\n"
-            "   Example CORRECT: \"content\": \"var x = 1;\\nvar y = 2;\"\n"
-            "6. Structure:\n"
+            "**Your Task:**\n"
+            "1. Interpret the request naturally (like ChatGPT would)\n"
+            "2. If unclear, make intelligent assumptions based on context\n"
+            "3. Be conversational in 'message' (e.g., 'I've converted your game to C# with proper namespaces!')\n"
+            "4. If appropriate, suggest next steps in 'message' (e.g., '...Want me to add unit tests?')\n"
+            "\n"
+            "**Examples of Good Responses:**\n"
+            "User: 'перепиши на C#'\n"
+            "You: {\"_thought\": \"User wants C# conversion. I'll create .cs files with proper C# syntax\", \"message\": \"I've converted your Snake game to C#! Created a .NET 6.0 project with all game logic. Want me to add Unity integration?\", \"files\": [...]}\n"
+            "\n"
+            "User: 'fix this'\n"
+            "You: {\"_thought\": \"User wants bug fixes. I see a missing semicolon in line 10 and wrong variable name\", \"message\": \"Fixed 2 bugs: added missing semicolon and corrected variable name. The code should run now!\", \"files\": [...]}\n"
+            "\n"
+            "User: 'make it 3D'\n"
+            "You: {\"_thought\": \"User wants 3D version. I'll add Three.js or similar 3D library\", \"message\": \"Upgraded to 3D! Added Three.js scene, camera, and 3D cube rendering. Try it out!\", \"files\": [...]}\n"
+            "\n"
+            "\n"
+            "**IMPORTANT: Response Format (JSON ONLY)**\n"
+            "You MUST respond with ONLY this JSON structure. No text before or after:\n"
             "{\n"
-            '  "_thought": "The user wants X. I will modify Y to do Z...",\n'
-            '  "message": "Description...",\n'
+            '  "_thought": "I understand the user wants to [intent]. I will [action] by [method].",\n'
+            '  "message": "Friendly response to user (e.g., \'I converted your Snake game to C# and created a .NET 6.0 project!\')",\n'
             '  "files": [\n'
-            '    { "path": "public/index.html", "content": "<!DOCTYPE html>\\n<html>..." }\n'
+            '    {"path": "NewFile.cs", "content": "full file content with \\\\n escaping"},\n'
+            '    {"path": "Project.csproj", "content": "..."}\n'
             '  ]\n'
             "}\n"
+            "\n"
+            "**Key Rules:**\n"
+            "1. If user wants to CONVERT to another language: create new files with correct extensions (.cs for C#, .py for Python, etc.)\n"
+            "2. If user wants to DELETE old files: mention it in 'message', but you can't delete (only create/modify)\n"
+            "3. Always return COMPLETE file content (not snippets)\n"
+            "4. Escape all newlines as \\\\n\n"
+            "5. Be conversational in 'message' field but technical in 'content'\n"
+            "\n"
+            "START YOUR RESPONSE WITH { AND END WITH } - NO OTHER TEXT!\n"
         )
 
     def _normalize_files(self, files: Optional[List[Dict[str, Any]]]) -> List[Dict[str, str]]:

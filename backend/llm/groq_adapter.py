@@ -80,9 +80,12 @@ class GroqLLMAdapter(BaseLLMAdapter):
         system_prompt = "You are a helpful assistant that generates code."
         if json_mode:
             system_prompt += (
-                " You MUST output valid JSON. "
-                "When outputting file content, the 'content' field MUST be a STRING, not an object. "
-                "Escape newlines as \\n and quotes as \\\"."
+                " You MUST respond with ONLY valid JSON. "
+                "Do NOT include any text, explanations, or markdown before or after the JSON object. "
+                "Your entire response must be parseable by JSON.parse(). "
+                "Start with { and end with }. "
+                "The 'content' field for files MUST be a plain string (not object/array). "
+                "Properly escape all newlines as \\n and quotes as \\\"."
             )
 
         chat_completion = await self.client.chat.completions.create(

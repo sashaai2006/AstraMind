@@ -1,9 +1,23 @@
 #!/usr/bin/env python3
 """Launch backend and frontend servers concurrently."""
 import asyncio
+import os
 import signal
 import sys
 from pathlib import Path
+
+# Load .env file if exists
+def load_env():
+    env_file = Path(__file__).parent / ".env"
+    if env_file.exists():
+        print(f"✓ Loading environment from .env")
+        with open(env_file) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    key, sep, value = line.partition("=")
+                    if sep:
+                        os.environ[key.strip()] = value.strip()
 
 async def main():
     """Run backend and frontend in parallel."""
@@ -58,6 +72,7 @@ async def main():
     print("Servers stopped")
 
 if __name__ == "__main__":
+    load_env()  # Load .env before starting
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
