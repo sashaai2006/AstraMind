@@ -94,7 +94,7 @@ class DeveloperAgent:
             await self._broadcast_thought(project_id, f"Running quality check on {len(critical_files)} critical file(s)...")
             try:
                 from backend.agents.reviewer import ReviewerAgent
-                reviewer = ReviewerAgent(self._semaphore)
+                reviewer = ReviewerAgent()  # No args needed
                 task_desc = f"{context['title']}: {step_name}"
                 review_result = await reviewer.review(task_desc, critical_files)
                 
