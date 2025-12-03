@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     projects_root: Path = Field(default=Path("./projects"), env="PROJECTS_ROOT")
     llm_mode: Literal["mock", "ollama", "groq"] = Field(default="mock", env="LLM_MODE")
     ollama_model: str = Field(default="llama3.2:3b", env="OLLAMA_MODEL")
-    groq_model: str = Field(default="llama-3.1-8b-instant", env="GROQ_MODEL")
+    groq_model: str = Field(default="llama-3.3-70b-versatile", env="GROQ_MODEL")
     llm_semaphore: int = Field(default=10, env="LLM_SEMAPHORE")  # Increased for parallelism
     github_api_url: str = Field(
         default="https://api.github.com", env="GITHUB_API_URL"
