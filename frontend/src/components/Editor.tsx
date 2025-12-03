@@ -11,10 +11,9 @@ type Props = {
   language: string;
   onSave: (nextContent: string) => Promise<void>;
   onDeepReview?: () => void;
-  onRun?: () => void;
 };
 
-const Editor: React.FC<Props> = ({ path, content, language, onSave, onDeepReview, onRun }) => {
+const Editor: React.FC<Props> = ({ path, content, language, onSave, onDeepReview }) => {
   const [value, setValue] = useState(content);
   const [saving, setSaving] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -98,21 +97,6 @@ const Editor: React.FC<Props> = ({ path, content, language, onSave, onDeepReview
           )}
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-            {onRun && (
-                <button 
-                    type="button" 
-                    onClick={onRun}
-                    title="Run project in sandbox"
-                    style={{
-                        background: "rgba(16, 185, 129, 0.2)",
-                        color: "#6ee7b7",
-                        border: "1px solid rgba(16, 185, 129, 0.3)",
-                        fontWeight: "bold"
-                    }}
-                >
-                  ▶️ Run
-                </button>
-            )}
             {onDeepReview && (
                 <button 
                     type="button" 

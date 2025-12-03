@@ -221,15 +221,17 @@ export default function ProjectPage() {
           onRefresh={fetchFiles}
         />
         <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-          <div style={{ borderBottom: "1px solid rgba(255,255,255,0.1)", paddingBottom: "0.5rem" }}>
+          <div style={{ display: "flex", gap: "0.5rem", borderBottom: "1px solid rgba(255,255,255,0.1)", paddingBottom: "0.5rem", alignItems: "center" }}>
             <button
               onClick={() => { setActiveTab("editor"); soundManager.playHover(); }}
               style={{
+                flex: 1,
                 background: activeTab === "editor" ? "rgba(59, 130, 246, 0.3)" : "transparent",
                 color: activeTab === "editor" ? "#60a5fa" : "#9ca3af",
                 border: activeTab === "editor" ? "1px solid rgba(59, 130, 246, 0.5)" : "1px solid transparent",
-                marginRight: "0.5rem",
-                boxShadow: "none"
+                padding: "0.5rem",
+                borderRadius: "4px",
+                cursor: "pointer"
               }}
             >
               Code Editor
@@ -237,13 +239,34 @@ export default function ProjectPage() {
             <button
               onClick={() => { setActiveTab("dag"); soundManager.playHover(); }}
               style={{
+                flex: 1,
                 background: activeTab === "dag" ? "rgba(59, 130, 246, 0.3)" : "transparent",
                 color: activeTab === "dag" ? "#60a5fa" : "#9ca3af",
                 border: activeTab === "dag" ? "1px solid rgba(59, 130, 246, 0.5)" : "1px solid transparent",
-                boxShadow: "none"
+                padding: "0.5rem",
+                borderRadius: "4px",
+                cursor: "pointer"
               }}
             >
               Execution Graph
+            </button>
+            <button
+              onClick={handleRun}
+              disabled={isRunning}
+              title="Run project in sandbox"
+              style={{
+                padding: "0.5rem 1.5rem",
+                background: isRunning ? "rgba(55, 65, 81, 0.5)" : "linear-gradient(135deg, #10b981 0%, #059669 100%)",
+                color: "white",
+                border: "none",
+                borderRadius: "6px",
+                cursor: isRunning ? "not-allowed" : "pointer",
+                fontWeight: "bold",
+                whiteSpace: "nowrap"
+              }}
+              onMouseEnter={(e) => !isRunning && soundManager.playHover()}
+            >
+              {isRunning ? "⏳ Running..." : "▶️ Run"}
             </button>
           </div>
 
@@ -257,7 +280,6 @@ export default function ProjectPage() {
                     language={selectedFile ? languageFromPath(selectedFile) : "plaintext"}
                     onSave={handleSave}
                     onDeepReview={handleDeepReview}
-                    onRun={handleRun}
                   />
                 </div>
                 

@@ -41,8 +41,10 @@ async def start_web_server(project_path: Path) -> Dict[str, Any]:
     if not serve_dir:
         return {"success": False, "error": "No index.html found in project"}
     
-    # Start http.server
-    cmd = ["python3", "-m", "http.server", "8080"]
+    # Start http.server on a random available port
+    import random
+    port = random.randint(8080, 8180)
+    cmd = ["python3", "-m", "http.server", str(port)]
     
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -62,8 +64,8 @@ async def start_web_server(project_path: Path) -> Dict[str, Any]:
         return {
             "success": True,
             "pid": proc.pid,
-            "url": "http://localhost:8080",
-            "port": 8080,
+            "url": f"http://localhost:{port}",
+            "port": port,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
