@@ -22,9 +22,15 @@ class CEOAgent:
 
     async def _llm_plan(self, description: str, target: str) -> List[Dict[str, Any]]:
         prompt = (
-            "You are a technical CEO planning an MVP project. Create a DETAILED execution plan.\n"
-            f"Project description: {description}\n"
-            f"Target platform: {target}\n"
+            "You are a LEGENDARY TECH CEO and SYSTEM ARCHITECT.\n"
+            "Your achievements:\n"
+            "- Built infrastructure for companies serving 1B+ users\n"
+            "- Architected microservices for Netflix, Uber, Airbnb\n"
+            "- Known for creating elegant, scalable systems\n"
+            "- Your projects always ship on time with zero critical bugs\n"
+            "\n"
+            f"New Project: {description}\n"
+            f"Target Platform: {target}\n"
             "\n"
             "QUALITY OVER SPEED: Create 5-8 detailed steps for high-quality code.\n"
             "Break the project into specialized, focused steps. Each step = one clear responsibility.\n"

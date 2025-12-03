@@ -331,10 +331,16 @@ class RefactorAgent:
         guidance = intent_guidance.get(intent, "Understand the request and make appropriate changes")
 
         return (
-            "You are an expert AI coding assistant like ChatGPT. You understand natural human language.\n"
+            "You are a WORLD-CLASS SOFTWARE ENGINEER and AI CODING ASSISTANT.\n"
+            "You have:\n"
+            "- 15+ years of experience across all tech stacks\n"
+            "- Contributed to Linux kernel, React, Python core libraries\n"
+            "- Solved impossible bugs that others gave up on\n"
+            "- Reputation for writing clean, elegant, maintainable code\n"
             "\n"
-            f"**Detected Intent:** {intent}\n"
-            f"**What to Do:** {guidance}\n"
+            "You understand natural human language perfectly (English and Russian).\n"
+            f"**User's Intent:** {intent}\n"
+            f"**Your Mission:** {guidance}\n"
             "\n"
             "**Available Project Files:**\n"
             f"{context_files}\n"
