@@ -121,7 +121,8 @@ class TesterAgent:
         """Check syntax of all code files."""
         issues = []
         
-        for file_path in iter_file_entries(project_path):
+        for file_entry in iter_file_entries(project_path):
+            file_path = str(file_entry)  # Convert FileEntry to string
             full_path = project_path / file_path
             
             # JavaScript/TypeScript
@@ -162,7 +163,8 @@ class TesterAgent:
         """Basic linting checks."""
         issues = []
         
-        for file_path in iter_file_entries(project_path):
+        for file_entry in iter_file_entries(project_path):
+            file_path = str(file_entry)  # Convert FileEntry to string
             if file_path.endswith(('.js', '.ts', '.jsx', '.tsx', '.py')):
                 try:
                     content = read_project_file(project_path, file_path)
@@ -253,7 +255,8 @@ class TesterAgent:
         try:
             # Read all files
             files_content = []
-            for file_path in iter_file_entries(project_path):
+            for file_entry in iter_file_entries(project_path):
+                file_path = str(file_entry)  # Convert FileEntry to string
                 content = read_project_file(project_path, file_path)
                 files_content.append(f"FILE: {file_path}\n```\n{content[:5000]}\n```")
             
