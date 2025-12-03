@@ -26,12 +26,12 @@ class CEOAgent:
             f"Project description: {description}\n"
             f"Target platform: {target}\n"
             "\n"
-            "STRICT RULE: Create EXACTLY 4-5 steps. Count them before responding.\n"
-            "Break the project into logical steps that run in parallel for speed.\n"
+            "QUALITY OVER SPEED: Create 5-8 detailed steps for high-quality code.\n"
+            "Break the project into specialized, focused steps. Each step = one clear responsibility.\n"
             "\n"
             "Output JSON:\n"
             "{\n"
-            '  "_thought": "I will create 4 steps: scaffold (group A), implement core (group A parallel), add features (group B), finalize (sequential)...",\n'
+            '  "_thought": "I will create 6 steps for quality: scaffold HTML/CSS (group A), implement core game logic (group A parallel), add rendering (group B), add controls (group B parallel), add features (group C), finalize + docs (sequential)...",\n'
             '  "steps": [\n'
             '    {\n'
             '      "name": "scaffold_frontend",\n'
@@ -51,11 +51,20 @@ class CEOAgent:
             "}\n"
             "\n"
             "MANDATORY:\n"
-            "1. EXACTLY 4-5 steps (no more, no less - count before submitting)\n"
-            "2. Use parallel_group for independent tasks (setup, features)\n"
-            "3. Each step: 3-8 files with DETAILED instructions\n"
+            "1. Create 5-8 steps for quality (more steps = better separation of concerns)\n"
+            "2. Use parallel_group strategically: group A (setup), B (core logic), C (features)\n"
+            "3. Each step: 2-5 files focusing on ONE specific area\n"
             "4. ALWAYS include index.html in first step for web projects\n"
-            "5. Return ONLY JSON\n"
+            "5. DETAILED instructions: explain WHAT the code should do and HOW (algorithms, data structures)\n"
+            "6. Return ONLY JSON\n"
+            "\n"
+            "EXAMPLE QUALITY PLAN FOR SNAKE GAME (6 steps):\n"
+            "Step 1: scaffold_ui (group: setup) - index.html, style.css\n"
+            "Step 2: implement_game_state (group: setup parallel) - game.js with state management\n"
+            "Step 3: implement_snake_logic (group: core) - snake.js with movement, growth, collision\n"
+            "Step 4: implement_food_system (group: core parallel) - food.js with random spawn, collision\n"
+            "Step 5: add_rendering (group: features) - renderer.js with canvas/Three.js drawing\n"
+            "Step 6: finalize (group: null) - README, package.json, deployment instructions\n"
         )
         adapter = get_llm_adapter()
         try:
@@ -76,19 +85,20 @@ class CEOAgent:
             if isinstance(data, list): # Fallback if LLM returned list directly
                 steps = data
 
-            # Ensure IDs and limit steps
+            # Ensure IDs and validate step count
             for step in steps:
                 if "id" not in step:
                     step["id"] = str(uuid4())
             
-            # Enforce 4-5 step limit
-            if len(steps) > 5:
-                LOGGER.warning("CEO created %d steps, limiting to 5", len(steps))
-                steps = steps[:5]
-            elif len(steps) < 2:
-                LOGGER.warning("CEO created only %d steps, using fallback", len(steps))
+            # Validate step range (5-8 for quality)
+            if len(steps) > 10:
+                LOGGER.warning("CEO created %d steps (too many), limiting to 8", len(steps))
+                steps = steps[:8]
+            elif len(steps) < 3:
+                LOGGER.warning("CEO created only %d steps (too few), using fallback", len(steps))
                 return self._mock_plan(description, target)
             
+            LOGGER.info("CEO created %d steps for quality development", len(steps))
             return steps
         except Exception as exc:
             LOGGER.error("CEO plan generation failed: %s", exc)

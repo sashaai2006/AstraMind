@@ -100,9 +100,9 @@ class GroqLLMAdapter(BaseLLMAdapter):
                 },
             ],
             model=self.model,
-            temperature=0.1,  # Low temperature for code
+            temperature=0.3,  # Slightly higher for creative but quality code
             response_format=response_format,
-            max_tokens=8192,
+            max_tokens=16000,  # Doubled for longer, complete code
         )
         choice = chat_completion.choices[0]
         finish_reason = getattr(choice, "finish_reason", None)

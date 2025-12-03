@@ -48,7 +48,7 @@ class DeveloperAgent:
         stop_event,
         on_message: Optional[Any] = None,
     ) -> None:
-        """Fast mode: generate code without review (default)."""
+        """Quality mode: generate code with optional review for critical files."""
         project_id = context["project_id"]
         if stop_event.is_set():
             LOGGER.info("Project %s stop requested; skipping step.", project_id)
@@ -59,11 +59,8 @@ class DeveloperAgent:
         files_spec = payload.get("files", [])
         
         await self._broadcast_thought(project_id, f"Analyzing specs for step: {step_name}...")
-        
-        # Removed inter-agent communication simulation for speed
-        # (was causing unnecessary WebSocket overhead)
 
-        await self._broadcast_thought(project_id, "Generating code (fast mode)...")
+        await self._broadcast_thought(project_id, "Generating high-quality code...")
 
         # Generate each file independently to avoid output token limits
         tasks = [
