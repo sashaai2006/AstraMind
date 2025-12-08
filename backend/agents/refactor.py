@@ -11,6 +11,7 @@ from backend.core.ws_manager import ws_manager
 from backend.llm.adapter import get_llm_adapter
 from backend.memory import utils as db_utils
 from backend.memory.db import get_session
+from backend.memory.vector_store import get_project_memory, get_semantic_cache
 from backend.settings import get_settings
 from backend.utils.fileutils import write_files, iter_file_entries, read_project_file
 from backend.utils.json_parser import clean_and_parse_json
@@ -56,7 +57,13 @@ class RefactorAgent:
         context_files = self._read_context_files(project_path, user_query=message)
         await self._broadcast_thought(str(project_id), "Reading relevant files...")
         
-        prompt = self._build_chat_prompt(message, context_files, history or [], intent)
+        # 🧠 Получаем релевантный контекст из долгосрочной памяти
+        memory = get_project_memory(str(project_id))
+        memory_context = memory.get_relevant_context(message, max_chars=1500)
+        if memory_context:
+            await self._broadcast_thought(str(project_id), "🧠 Found relevant context in memory")
+        
+        prompt = self._build_chat_prompt(message, context_files, history or [], intent, memory_context)
 
         LOGGER.info("RefactorAgent calling LLM for project %s", project_id)
         await self._broadcast_thought(str(project_id), "Thinking about your request...")
@@ -143,6 +150,21 @@ class RefactorAgent:
                         project_id,
                         f"Refactor applied: {len(saved)} files changed",
                         agent="refactor",
+                    )
+                
+                # 🧠 Сохраняем в долгосрочную память
+                for file_def in files_to_update:
+                    path = file_def.get("path", "")
+                    content = file_def.get("content", "")
+                    if content and len(content) < 10000:
+                        memory.add_file(path, content)
+                
+                # Сохраняем решение агента
+                thought = updates.get("_thought", "")
+                if thought:
+                    memory.add_decision(
+                        decision=f"Refactored: {message[:100]}",
+                        reasoning=thought
                     )
 
                 # Notify frontend
@@ -300,7 +322,7 @@ class RefactorAgent:
         # Default
         return "modify code"
 
-    def _build_chat_prompt(self, user_message: str, context_files: str, history: List[Dict[str, str]], intent: str = "modify code") -> str:
+    def _build_chat_prompt(self, user_message: str, context_files: str, history: List[Dict[str, str]], intent: str = "modify code", memory_context: str = "") -> str:
         history_text = ""
         if history:
             history_text = "Previous Conversation:\n"
@@ -309,6 +331,14 @@ class RefactorAgent:
                 content = msg.get("content", "")
                 history_text += f"{'User' if role == 'user' else 'You'}: {content}\n"
             history_text += "\n"
+        
+        # 🧠 Добавляем контекст из долгосрочной памяти
+        memory_section = ""
+        if memory_context:
+            memory_section = (
+                "**Relevant Context from Project Memory (previous decisions/files):**\n"
+                f"{memory_context}\n\n"
+            )
 
         # Build intent-specific guidance
         intent_guidance = {
@@ -339,6 +369,7 @@ class RefactorAgent:
             f"**User's Intent:** {intent}\n"
             f"**Your Mission:** {guidance}\n"
             "\n"
+            f"{memory_section}"
             "**Available Project Files:**\n"
             f"{context_files}\n"
             "\n"

@@ -17,14 +17,14 @@ LOGGER = get_logger(__name__)
 DATABASE_PATH = Path(__file__).resolve().parents[1] / "data.db"
 DATABASE_URL = f"sqlite+aiosqlite:///{DATABASE_PATH}"
 
-from sqlalchemy.pool import QueuePool
+from sqlalchemy.pool import AsyncAdaptedQueuePool
 
 engine: AsyncEngine = create_async_engine(
     DATABASE_URL, 
     echo=False, 
     future=True, 
     connect_args={"check_same_thread": False},
-    poolclass=QueuePool,
+    poolclass=AsyncAdaptedQueuePool,
     pool_size=20,
     max_overflow=10,
     pool_timeout=30,

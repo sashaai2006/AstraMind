@@ -11,12 +11,23 @@ from backend.core.ws_manager import ws_manager
 from backend.llm.adapter import get_llm_adapter
 from backend.memory import utils as db_utils
 from backend.memory.db import get_session
+from backend.memory.vector_store import get_project_memory, get_semantic_cache
+from backend.memory.knowledge_sources import get_knowledge_registry
 from backend.settings import get_settings
 from backend.utils.fileutils import write_files_async
 from backend.utils.json_parser import clean_and_parse_json
 from backend.utils.logging import get_logger
 
 LOGGER = get_logger(__name__)
+
+# Глобальный семантический кэш
+_semantic_cache = None
+
+def _get_cache():
+    global _semantic_cache
+    if _semantic_cache is None:
+        _semantic_cache = get_semantic_cache()
+    return _semantic_cache
 
 
 class DeveloperAgent:
@@ -299,7 +310,7 @@ class DeveloperAgent:
 
 
     async def _save_files(self, project_id: str, step: Dict[str, Any], file_defs: List[Dict[str, str]]) -> None:
-        """Save files to disk and record artifacts."""
+        """Save files to disk, record artifacts, and store in vector memory."""
         project_path = self._settings.projects_root / project_id
         project_path.mkdir(parents=True, exist_ok=True)
         project_root = project_path.resolve()
@@ -325,6 +336,15 @@ class DeveloperAgent:
             await db_utils.add_artifacts(
                 session, UUID(project_id), relative_paths, sizes
             )
+        
+        # 🧠 Сохраняем файлы в векторную память для долгосрочного контекста
+        memory = get_project_memory(project_id)
+        for file_def in file_defs:
+            path = file_def.get("path", "")
+            content = file_def.get("content", "")
+            # Сохраняем только код (не слишком большие файлы)
+            if content and len(content) < 10000:
+                memory.add_file(path, content)
 
         # Batch WebSocket broadcasts using gather
         tasks = []
@@ -349,10 +369,46 @@ class DeveloperAgent:
             await asyncio.gather(*tasks)
 
     async def _execute_with_retry(self, prompt: str, step: Dict[str, Any], context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Execute LLM call with retries and repair logic."""
+        """Execute LLM call with retries, repair logic, and semantic caching."""
         max_retries = 2
         current_prompt = prompt
         project_id = context["project_id"]
+        
+        # 1. Проверяем семантический кэш
+        cache = _get_cache()
+        cached_response = cache.get(prompt)
+        if cached_response:
+            await self._broadcast_thought(project_id, "📦 Using cached response (semantic match)", "info")
+            try:
+                parsed = clean_and_parse_json(cached_response)
+                if isinstance(parsed, dict) and "files" in parsed:
+                    return parsed
+                elif isinstance(parsed, list):
+                    return {"files": parsed}
+            except Exception:
+                pass  # Кэш невалидный, продолжаем с LLM
+        
+        # 2. Добавляем контекст из долгосрочной памяти
+        memory = get_project_memory(project_id)
+        relevant_context = memory.get_relevant_context(
+            f"{context.get('title', '')} {step.get('name', '')}",
+            max_chars=2000
+        )
+        if relevant_context:
+            current_prompt = f"{prompt}\n\n--- RELEVANT CONTEXT FROM MEMORY ---\n{relevant_context}"
+            await self._broadcast_thought(project_id, "🧠 Found relevant context in memory", "info")
+        
+        # 3. Добавляем знания из базы знаний (best practices, style guides)
+        tech_stack = context.get("tech_stack") or step.get("payload", {}).get("tech_stack")
+        knowledge_registry = get_knowledge_registry()
+        knowledge_context = knowledge_registry.get_context_for_task(
+            task_description=f"{context.get('title', '')} {step.get('name', '')}",
+            tech_stack=tech_stack,
+            max_chars=1500
+        )
+        if knowledge_context:
+            current_prompt = f"{current_prompt}\n\n--- RELEVANT KNOWLEDGE (Best Practices) ---\n{knowledge_context}"
+            await self._broadcast_thought(project_id, "📚 Found relevant knowledge from best practices", "info")
         
         for attempt in range(max_retries + 1):
             LOGGER.info(
@@ -376,8 +432,19 @@ class DeveloperAgent:
                 if isinstance(parsed, dict) and "files" in parsed:
                     if "_thought" in parsed:
                         await self._broadcast_thought(project_id, f"Developer thought: {parsed['_thought']}", "info")
+                    
+                    # 3. Сохраняем успешный результат в кэш
+                    cache.set(prompt, completion)
+                    
+                    # 4. Сохраняем решение в память проекта
+                    memory.add_decision(
+                        decision=f"Step '{step.get('name')}' completed",
+                        reasoning=parsed.get("_thought", "")
+                    )
+                    
                     return parsed
                 elif isinstance(parsed, list):
+                    cache.set(prompt, completion)
                     return {"files": parsed}
                 else:
                     raise ValueError("JSON is valid but does not contain 'files' or is not a list")

@@ -17,6 +17,8 @@ from backend.core.ws_manager import ws_manager
 from backend.memory import utils as db_utils
 from backend.memory.db import get_session_dependency
 from backend.memory.models import Project
+from backend.memory.vector_store import get_project_memory, get_semantic_cache
+from backend.memory.knowledge_sources import get_knowledge_registry, KnowledgeSource
 from backend.settings import get_settings
 from backend.utils import fileutils
 from backend.utils.logging import get_logger
@@ -357,3 +359,178 @@ async def save_file(
         },
     )
     return {"path": payload.path, "size_bytes": size}
+
+
+# ============ Memory / Knowledge API ============
+
+class MemorySearchRequest(BaseModel):
+    """Request for memory search."""
+    query: str
+    n_results: int = 5
+    context_type: Optional[str] = None  # file, event, decision
+
+
+class MemoryAddRequest(BaseModel):
+    """Request to add memory."""
+    content: str
+    context_type: str = "general"
+    metadata: Optional[Dict[str, str]] = None
+
+
+@router.get("/{project_id}/memory/search")
+async def search_project_memory(
+    project_id: UUID,
+    query: str = Query(..., description="Search query"),
+    n_results: int = Query(default=5, ge=1, le=20),
+    context_type: Optional[str] = Query(default=None),
+) -> List[Dict]:
+    """
+    Поиск в долгосрочной памяти проекта.
+    
+    Возвращает релевантные документы (файлы, события, решения).
+    """
+    memory = get_project_memory(str(project_id))
+    results = memory.search(query, n_results=n_results, context_type=context_type)
+    return results
+
+
+@router.post("/{project_id}/memory/add")
+async def add_to_project_memory(
+    project_id: UUID,
+    request: MemoryAddRequest,
+) -> Dict:
+    """
+    Добавить информацию в память проекта вручную.
+    
+    Полезно для добавления контекста, который агенты не знают автоматически.
+    """
+    memory = get_project_memory(str(project_id))
+    success = memory.add_context(
+        content=request.content,
+        context_type=request.context_type,
+        metadata=request.metadata
+    )
+    return {"success": success}
+
+
+@router.get("/{project_id}/memory/context")
+async def get_relevant_context(
+    project_id: UUID,
+    task: str = Query(..., description="Task description to find relevant context for"),
+    max_chars: int = Query(default=3000, ge=100, le=10000),
+) -> Dict:
+    """
+    Получить релевантный контекст для задачи.
+    
+    Используется для улучшения качества генерации кода.
+    """
+    memory = get_project_memory(str(project_id))
+    context = memory.get_relevant_context(task, max_chars=max_chars)
+    return {"context": context, "length": len(context)}
+
+
+@router.delete("/cache/clear")
+async def clear_semantic_cache() -> Dict:
+    """
+    Очистить семантический кэш LLM запросов.
+    
+    Полезно для отладки или принудительного обновления.
+    """
+    cache = get_semantic_cache()
+    success = cache.clear()
+    return {"success": success, "message": "Semantic cache cleared" if success else "Failed to clear cache"}
+
+
+# ============ Knowledge Sources API ============
+
+class KnowledgeAddRequest(BaseModel):
+    """Request to add knowledge to a source."""
+    content: str
+    title: str = ""
+    tags: Optional[List[str]] = None
+
+
+class KnowledgeSearchRequest(BaseModel):
+    """Request to search knowledge."""
+    query: str
+    n_results: int = 5
+    source_ids: Optional[List[str]] = None
+    tags: Optional[List[str]] = None
+
+
+@router.get("/knowledge/sources")
+async def list_knowledge_sources() -> List[Dict]:
+    """
+    Список всех источников знаний.
+    """
+    registry = get_knowledge_registry()
+    sources = registry.list_sources()
+    return [
+        {
+            "id": s.id,
+            "name": s.name,
+            "source_type": s.source_type,
+            "description": s.description,
+            "enabled": s.enabled,
+        }
+        for s in sources
+    ]
+
+
+@router.post("/knowledge/sources/{source_id}/add")
+async def add_knowledge_to_source(
+    source_id: str,
+    request: KnowledgeAddRequest,
+) -> Dict:
+    """
+    Добавить знания в источник.
+    """
+    registry = get_knowledge_registry()
+    source = registry.get_source(source_id)
+    
+    if not source:
+        raise HTTPException(status_code=404, detail=f"Source '{source_id}' not found")
+    
+    success = registry.add_knowledge(
+        source_id=source_id,
+        content=request.content,
+        title=request.title,
+        tags=request.tags
+    )
+    
+    return {"success": success}
+
+
+@router.post("/knowledge/search")
+async def search_knowledge(request: KnowledgeSearchRequest) -> List[Dict]:
+    """
+    Поиск по базе знаний.
+    """
+    registry = get_knowledge_registry()
+    results = registry.search_knowledge(
+        query=request.query,
+        n_results=request.n_results,
+        source_ids=request.source_ids,
+        tags=request.tags
+    )
+    return results
+
+
+@router.get("/knowledge/context")
+async def get_knowledge_context(
+    task: str = Query(..., description="Task description"),
+    tech_stack: Optional[str] = Query(default=None, description="Technology stack (e.g., python, cpp, react)"),
+    max_chars: int = Query(default=2000, ge=100, le=5000),
+) -> Dict:
+    """
+    Получить релевантные знания для задачи.
+    
+    Используется агентами для улучшения качества генерации.
+    """
+    registry = get_knowledge_registry()
+    context = registry.get_context_for_task(
+        task_description=task,
+        tech_stack=tech_stack,
+        max_chars=max_chars
+    )
+    return {"context": context, "length": len(context)}
