@@ -208,7 +208,14 @@ class TesterAgent:
         issues = []
         target = context.get("target", "web")
         # Try to infer stack if not explicit (fallback)
-        is_cpp = any(f.endswith(('.cpp', '.hpp', '.h', '.cc')) for f in iter_file_entries(project_path))
+        try:
+            is_cpp = any(
+                getattr(f, "path", f).endswith((".cpp", ".hpp", ".h", ".cc"))
+                for f in iter_file_entries(project_path)
+            )
+        except Exception as e:
+            LOGGER.warning("Runtime stack detection failed, defaulting to non-C++: %s", e)
+            is_cpp = False
         
         # For web projects, check if HTML loads scripts correctly
         if target == "web" and not is_cpp:
