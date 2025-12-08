@@ -338,13 +338,17 @@ class DeveloperAgent:
             )
         
         # 🧠 Сохраняем файлы в векторную память для долгосрочного контекста
-        memory = get_project_memory(project_id)
-        for file_def in file_defs:
-            path = file_def.get("path", "")
-            content = file_def.get("content", "")
-            # Сохраняем только код (не слишком большие файлы)
-            if content and len(content) < 10000:
-                memory.add_file(path, content)
+        try:
+            memory = get_project_memory(project_id)
+            for file_def in file_defs:
+                path = file_def.get("path", "")
+                content = file_def.get("content", "")
+                # Сохраняем только код (не слишком большие файлы)
+                if content and len(content) < 10000:
+                    memory.add_file(path, content)
+        except Exception as e:
+            LOGGER.warning("Failed to save files to memory: %s", e)
+            # Продолжаем без сохранения в память
 
         # Batch WebSocket broadcasts using gather
         tasks = []
@@ -388,27 +392,35 @@ class DeveloperAgent:
             except Exception:
                 pass  # Кэш невалидный, продолжаем с LLM
         
-        # 2. Добавляем контекст из долгосрочной памяти
-        memory = get_project_memory(project_id)
-        relevant_context = memory.get_relevant_context(
-            f"{context.get('title', '')} {step.get('name', '')}",
-            max_chars=2000
-        )
-        if relevant_context:
-            current_prompt = f"{prompt}\n\n--- RELEVANT CONTEXT FROM MEMORY ---\n{relevant_context}"
-            await self._broadcast_thought(project_id, "🧠 Found relevant context in memory", "info")
+        # 2. Добавляем контекст из долгосрочной памяти (с обработкой ошибок)
+        try:
+            memory = get_project_memory(project_id)
+            relevant_context = memory.get_relevant_context(
+                f"{context.get('title', '')} {step.get('name', '')}",
+                max_chars=2000
+            )
+            if relevant_context:
+                current_prompt = f"{prompt}\n\n--- RELEVANT CONTEXT FROM MEMORY ---\n{relevant_context}"
+                await self._broadcast_thought(project_id, "🧠 Found relevant context in memory", "info")
+        except Exception as e:
+            LOGGER.warning("Failed to load memory context: %s", e)
+            # Продолжаем без памяти
         
         # 3. Добавляем знания из базы знаний (best practices, style guides)
-        tech_stack = context.get("tech_stack") or step.get("payload", {}).get("tech_stack")
-        knowledge_registry = get_knowledge_registry()
-        knowledge_context = knowledge_registry.get_context_for_task(
-            task_description=f"{context.get('title', '')} {step.get('name', '')}",
-            tech_stack=tech_stack,
-            max_chars=1500
-        )
-        if knowledge_context:
-            current_prompt = f"{current_prompt}\n\n--- RELEVANT KNOWLEDGE (Best Practices) ---\n{knowledge_context}"
-            await self._broadcast_thought(project_id, "📚 Found relevant knowledge from best practices", "info")
+        try:
+            tech_stack = context.get("tech_stack") or step.get("payload", {}).get("tech_stack")
+            knowledge_registry = get_knowledge_registry()
+            knowledge_context = knowledge_registry.get_context_for_task(
+                task_description=f"{context.get('title', '')} {step.get('name', '')}",
+                tech_stack=tech_stack,
+                max_chars=1500
+            )
+            if knowledge_context:
+                current_prompt = f"{current_prompt}\n\n--- RELEVANT KNOWLEDGE (Best Practices) ---\n{knowledge_context}"
+                await self._broadcast_thought(project_id, "📚 Found relevant knowledge from best practices", "info")
+        except Exception as e:
+            LOGGER.warning("Failed to load knowledge context: %s", e)
+            # Продолжаем без знаний
         
         for attempt in range(max_retries + 1):
             LOGGER.info(
@@ -434,13 +446,20 @@ class DeveloperAgent:
                         await self._broadcast_thought(project_id, f"Developer thought: {parsed['_thought']}", "info")
                     
                     # 3. Сохраняем успешный результат в кэш
-                    cache.set(prompt, completion)
+                    try:
+                        cache.set(prompt, completion)
+                    except Exception as e:
+                        LOGGER.warning("Failed to cache response: %s", e)
                     
                     # 4. Сохраняем решение в память проекта
-                    memory.add_decision(
-                        decision=f"Step '{step.get('name')}' completed",
-                        reasoning=parsed.get("_thought", "")
-                    )
+                    try:
+                        memory = get_project_memory(project_id)
+                        memory.add_decision(
+                            decision=f"Step '{step.get('name')}' completed",
+                            reasoning=parsed.get("_thought", "")
+                        )
+                    except Exception as e:
+                        LOGGER.warning("Failed to save decision to memory: %s", e)
                     
                     return parsed
                 elif isinstance(parsed, list):

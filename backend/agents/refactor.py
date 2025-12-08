@@ -58,10 +58,15 @@ class RefactorAgent:
         await self._broadcast_thought(str(project_id), "Reading relevant files...")
         
         # 🧠 Получаем релевантный контекст из долгосрочной памяти
-        memory = get_project_memory(str(project_id))
-        memory_context = memory.get_relevant_context(message, max_chars=1500)
-        if memory_context:
-            await self._broadcast_thought(str(project_id), "🧠 Found relevant context in memory")
+        memory_context = ""
+        try:
+            memory = get_project_memory(str(project_id))
+            memory_context = memory.get_relevant_context(message, max_chars=1500)
+            if memory_context:
+                await self._broadcast_thought(str(project_id), "🧠 Found relevant context in memory")
+        except Exception as e:
+            LOGGER.warning("Failed to load memory context in refactor: %s", e)
+            # Продолжаем без памяти
         
         prompt = self._build_chat_prompt(message, context_files, history or [], intent, memory_context)
 
@@ -153,19 +158,24 @@ class RefactorAgent:
                     )
                 
                 # 🧠 Сохраняем в долгосрочную память
-                for file_def in files_to_update:
-                    path = file_def.get("path", "")
-                    content = file_def.get("content", "")
-                    if content and len(content) < 10000:
-                        memory.add_file(path, content)
-                
-                # Сохраняем решение агента
-                thought = updates.get("_thought", "")
-                if thought:
-                    memory.add_decision(
-                        decision=f"Refactored: {message[:100]}",
-                        reasoning=thought
-                    )
+                try:
+                    memory = get_project_memory(str(project_id))
+                    for file_def in files_to_update:
+                        path = file_def.get("path", "")
+                        content = file_def.get("content", "")
+                        if content and len(content) < 10000:
+                            memory.add_file(path, content)
+                    
+                    # Сохраняем решение агента
+                    thought = updates.get("_thought", "")
+                    if thought:
+                        memory.add_decision(
+                            decision=f"Refactored: {message[:100]}",
+                            reasoning=thought
+                        )
+                except Exception as e:
+                    LOGGER.warning("Failed to save to memory in refactor: %s", e)
+                    # Продолжаем без сохранения в память
 
                 # Notify frontend
                 for rel_path in relative_paths:
