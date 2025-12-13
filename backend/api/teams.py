@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field as PydanticField
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -220,7 +220,7 @@ async def update_team(
 async def delete_team(
     team_id: UUID,
     session: AsyncSession = Depends(get_session_dependency),
-) -> None:
+) -> Response:
     res = await session.execute(select(Team).where(Team.id == team_id))
     team = res.scalar_one_or_none()
     if not team:
@@ -240,4 +240,4 @@ async def delete_team(
 
     await session.delete(team)
     await session.commit()
-    return None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

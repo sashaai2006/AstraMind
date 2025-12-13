@@ -115,6 +115,10 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"detail": "Internal Server Error"},
     )
 
+@app.get("/api/health")
+async def health_check():
+    return {"status": "ok"}
+
 app.include_router(projects.router)
 app.include_router(websocket.router)
 app.include_router(documents.router)

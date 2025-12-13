@@ -2,8 +2,6 @@ import React, { useState, useRef, useEffect } from "react";
 import { soundManager } from "../utils/sound";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { vscDarkPlus } from "react-syntax-highlighter/dist/cjs/styles/prism";
 
 export type Message = {
   role: "user" | "ai";
@@ -243,18 +241,29 @@ const ChatPanel: React.FC<Props> = ({ onSendMessage, selectedFile, messages, onM
               <ReactMarkdown 
                 remarkPlugins={[remarkGfm]}
                 components={{
-                  code({ node, inline, className, children, ...props }) {
+                  code({ node, className, children, ...props }: any) {
                     const match = /language-(\w+)/.exec(className || '');
-                    return !inline && match ? (
-                      <SyntaxHighlighter
-                        style={vscDarkPlus as any}
-                        language={match[1]}
-                        PreTag="div"
-                        {...props}
-                      >
-                        {String(children).replace(/\n$/, '')}
-                      </SyntaxHighlighter>
-                    ) : (
+                    const inline = !match;
+                    if (!inline && match) {
+                      return (
+                        <pre style={{
+                          background: "rgba(0,0,0,0.5)",
+                          padding: "1rem",
+                          borderRadius: "6px",
+                          overflow: "auto",
+                          margin: "0.5rem 0"
+                        }}>
+                          <code className={className} {...props} style={{
+                            color: "#d4d4d4",
+                            fontSize: "0.85em",
+                            fontFamily: "monospace"
+                          }}>
+                            {children}
+                          </code>
+                        </pre>
+                      );
+                    }
+                    return (
                       <code className={className} {...props} style={{ 
                         background: "rgba(0,0,0,0.3)", 
                         padding: "2px 4px", 

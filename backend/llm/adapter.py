@@ -8,6 +8,7 @@ from backend.settings import get_settings
 class BaseLLMAdapter(ABC):
     @abstractmethod
     async def acomplete(self, prompt: str, json_mode: bool = False, cache_key: Optional[str] = None) -> str:
+        pass
 
 _cached_adapter: Optional[BaseLLMAdapter] = None
 

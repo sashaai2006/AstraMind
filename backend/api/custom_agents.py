@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field as PydanticField
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -114,7 +114,7 @@ async def update_custom_agent(
 async def delete_custom_agent(
     agent_id: UUID,
     session: AsyncSession = Depends(get_session_dependency),
-) -> None:
+) -> Response:
     res = await session.execute(select(CustomAgent).where(CustomAgent.id == agent_id))
     agent = res.scalar_one_or_none()
     if not agent:
@@ -122,4 +122,4 @@ async def delete_custom_agent(
 
     await session.delete(agent)
     await session.commit()
-    return None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
