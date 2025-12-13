@@ -17,7 +17,7 @@ RUN curl -fL "https://github.com/tectonic-typesetting/tectonic/releases/download
     chmod +x /usr/local/bin/tectonic && \
     rm -f tectonic.tar.gz
 
-RUN ldconfig && /usr/local/bin/tectonic --version
+RUN ldconfig
 
 WORKDIR /app
 
