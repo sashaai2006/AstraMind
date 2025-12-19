@@ -26,14 +26,13 @@ class Orchestrator:
     async def _get_graph(self):
         async with self._init_lock:
             if self._compiled_graph is None:
-                # Add timeout to prevent hanging on checkpointer/graph creation
                 try:
                     checkpointer = await asyncio.wait_for(get_checkpointer(), timeout=10.0)
                     self._compiled_graph = create_project_graph(checkpointer)
                 except asyncio.TimeoutError:
                     LOGGER.error("Graph initialization timed out after 10s")
                     raise RuntimeError("Graph initialization timeout")
-            return self._compiled_graph
+        return self._compiled_graph
 
     def get_stop_event(self, project_id: str) -> asyncio.Event:
         ev = self._stop_events.get(project_id)
@@ -54,15 +53,11 @@ class Orchestrator:
         project_str = str(project_id)
         LOGGER.info("Starting project %s via LangGraph", project_str)
         
-        # Emit initial event so frontend knows workflow started (non-blocking)
         from backend.core.event_bus import emit_event
-        try:
-            await asyncio.wait_for(emit_event(project_str, f"Starting project: {title}", agent="system", level="info"), timeout=1.0)
-        except asyncio.TimeoutError:
-            LOGGER.warning("Initial emit_event timed out, continuing...")
+        asyncio.create_task(
+            emit_event(project_str, f"Starting project: {title}", agent="system", level="info")
+        )
 
-        # Initial state
-        # Try to fetch agent config from DB (best effort, with timeout to avoid blocking)
         agent_preset: Optional[str] = None
         custom_agent_id: Optional[str] = None
         team_id: Optional[str] = None
@@ -70,7 +65,7 @@ class Orchestrator:
         
         async def _load_agent_config():
             async with get_session() as session:
-                from sqlalchemy import select  # type: ignore[import-not-found]
+                from sqlalchemy import select
                 project = await db_utils.get_project(session, project_id)
                 if project is not None:
                     agent_preset_val = getattr(project, "agent_preset", None)
@@ -78,7 +73,6 @@ class Orchestrator:
                     team_id_val = str(getattr(project, "team_id", None)) if getattr(project, "team_id", None) else None
                     persona_prompt_val: Optional[str] = None
 
-                    # Resolve persona prompt for custom agent/team (highest priority)
                     if getattr(project, "custom_agent_id", None):
                         res = await session.execute(
                             select(CustomAgent).where(CustomAgent.id == project.custom_agent_id)
@@ -95,16 +89,13 @@ class Orchestrator:
                         res = await session.execute(select(Team).where(Team.id == project.team_id))
                         team = res.scalar_one_or_none()
                         if team:
-                            # New membership table (presets + custom)
                             res_members = await session.execute(
                                 select(TeamMember).where(TeamMember.team_id == team.id)
                             )
                             members = list(res_members.scalars().all())
-
                             custom_ids = {m.custom_agent_id for m in members if m.custom_agent_id}
                             preset_ids = {m.preset_id for m in members if m.preset_id}
 
-                            # Backward-compat: old link table (custom only)
                             res_links = await session.execute(
                                 select(TeamAgentLink.agent_id).where(TeamAgentLink.team_id == team.id)
                             )
@@ -114,7 +105,6 @@ class Orchestrator:
                             members_prompt = ""
                             blocks = []
 
-                            # Preset members
                             for pid in sorted(preset_ids):
                                 preset = get_preset_by_id(pid)
                                 if not preset:
@@ -126,7 +116,6 @@ class Orchestrator:
                                     + (f"\nTags: {tags}\n" if tags else "")
                                 )
 
-                            # Custom members
                             if custom_ids:
                                 res_agents = await session.execute(
                                     select(CustomAgent).where(CustomAgent.id.in_(sorted(custom_ids)))
@@ -137,22 +126,24 @@ class Orchestrator:
                                     blocks.append(
                                         f"--- {m.name} ---\n{m.prompt}\n" + (f"\nTech Stack: {tech}\n" if tech else "")
                                     )
+
                             members_prompt = "\n\n".join(blocks)
                             persona_prompt_val = (
                                 f"=== TEAM: {team.name} ===\n"
                                 + (f"{team.description}\n\n" if team.description else "")
                                 + (members_prompt if members_prompt else "No members.\n")
                             )
+
                     return agent_preset_val, custom_agent_id_val, team_id_val, persona_prompt_val
-                return None, None, None, None
+            return None, None, None, None
         
-        # Load with timeout (3s max) - don't block startup
         try:
-            agent_preset, custom_agent_id, team_id, persona_prompt = await asyncio.wait_for(_load_agent_config(), timeout=3.0)
-        except asyncio.TimeoutError:
-            LOGGER.warning("Agent config loading timed out, using defaults")
-        except Exception as e:
-            LOGGER.debug("Failed to load agent_preset for %s: %s", project_id, e)
+            agent_preset, custom_agent_id, team_id, persona_prompt = await asyncio.wait_for(
+                _load_agent_config(), 
+                timeout=0.15
+            )
+        except (asyncio.TimeoutError, Exception) as e:
+            LOGGER.debug("Using default agent config: %s", e)
 
         initial_state: ProjectState = {
             "project_id": project_str,
@@ -173,8 +164,7 @@ class Orchestrator:
             "retry_count": 0,
             "status": "planning"
         }
-
-        # Fire and forget execution
+        
         task = asyncio.create_task(self._run_workflow(project_str, initial_state))
         self._tasks[project_str] = task
         task.add_done_callback(lambda _: self._tasks.pop(project_str, None))
@@ -184,12 +174,9 @@ class Orchestrator:
             graph = await self._get_graph()
             config = {"configurable": {"thread_id": project_id}}
             
-            # Update DB status
             async with get_session() as session:
                 await db_utils.update_project_status(session, UUID(project_id), "running")
 
-            # Invoke graph
-            # If state is None, it means we are resuming, passing None to input triggers load from checkpoint
             await graph.ainvoke(state, config=config)
         except asyncio.CancelledError:
             LOGGER.info("Workflow cancelled for project %s", project_id)
@@ -209,17 +196,13 @@ class Orchestrator:
             graph = await self._get_graph()
             config = {"configurable": {"thread_id": project_str}}
             
-            # Check if we have a checkpoint
             snapshot = await graph.aget_state(config)
             if not snapshot.values:
-                LOGGER.warning("No checkpoint found for %s (likely from pre-migration). Marking as failed.", project_str)
-                # We could restart here, but without fetching project data from DB it's hard.
-                # For now, just fail gracefully to stop the crash loop.
+                LOGGER.warning("No checkpoint found for %s. Marking as failed.", project_str)
                 async with get_session() as session:
                     await db_utils.update_project_status(session, project_id, "failed")
                 return
 
-            # Passing None as input to ainvoke with a thread_id will resume from last checkpoint
             task = asyncio.create_task(self._run_workflow(project_str, state=None))
             self._tasks[project_str] = task
             task.add_done_callback(lambda _: self._tasks.pop(project_str, None))
@@ -231,8 +214,6 @@ class Orchestrator:
     async def shutdown(self) -> None:
         await close_checkpointer()
 
-    # Legacy method helper for group_steps used by generate_node
-    # Can be moved to utils later
     def _group_steps(self, steps):
         from collections import OrderedDict
         from uuid import uuid4
