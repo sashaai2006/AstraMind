@@ -14,7 +14,8 @@ from backend.memory import utils as db_utils
 from backend.memory.db import get_session
 from backend.memory.vector_store import get_project_memory
 from backend.settings import get_settings
-from backend.utils.fileutils import write_files, iter_file_entries, read_project_file
+from backend.utils.fileutils import write_files, iter_file_entries, read_project_file, get_file_size_cached
+from itertools import islice
 from backend.utils.json_parser import clean_and_parse_json
 from backend.utils.logging import get_logger
 
@@ -237,72 +238,92 @@ class RefactorAgent:
         return response_message
 
     def _read_context_files(self, project_path: Path, user_query: str = "") -> str:
-        entries = list(iter_file_entries(project_path))[:30]  # Limit to first 30 files for speed
-        
+        # Lazily scan up to N entries to avoid full project traversal
+        SCAN_LIMIT = 200
+        entries = list(islice(iter_file_entries(project_path), SCAN_LIMIT))
+
+        # Helper to safely get file size (falls back to 0)
+        def _get_size(entry) -> int:
+            try:
+                # Some FileEntry implementations may already provide size_bytes
+                if hasattr(entry, "size_bytes"):
+                    return int(getattr(entry, "size_bytes") or 0)
+                # Otherwise compute from filesystem
+                full = project_path / entry.path
+                if full.exists():
+                    return int(full.stat().st_size)
+            except Exception:
+                pass
+            return 0
+
         # Scoring function
         def score_entry(entry):
             score = 0
-            path_str = entry.path.lower()
+            path_str = getattr(entry, "path", "").lower()
             query_terms = user_query.lower().split()
-            
+
             # Match terms in query (high priority)
             for term in query_terms:
                 if len(term) > 3 and term in path_str:
-                    score += 20  # Increased from 10
-            
+                    score += 20
+
             # Prioritize source code
-            if path_str.endswith(('.py', '.tsx', '.ts', '.js', '.jsx', '.html', '.css', '.cs', '.cpp', '.c', '.h', '.hpp', '.rs', '.go', '.java', '.php', '.rb')):
+            if path_str.endswith((
+                '.py', '.tsx', '.ts', '.js', '.jsx', '.html', '.css', '.cs',
+                '.cpp', '.c', '.h', '.hpp', '.rs', '.go', '.java', '.php', '.rb'
+            )):
                 score += 5
             elif path_str.endswith('.json') or path_str.endswith('.md'):
-                score += 1  # Reduced from 2
+                score += 1
             else:
-                score -= 10  # Increased penalty for irrelevant files
-                
-            # Strong penalty for size
-            if entry.size_bytes > 5000:  # Reduced threshold
+                score -= 10
+
+            size = _get_size(entry)
+            # Penalize large files
+            if size > 5000:
                 score -= 5
-            if entry.size_bytes > 20000:  # More aggressive
+            if size > 20000:
                 score -= 20
-                
+
             return score
 
         # Sort by score descending
         sorted_entries = sorted(entries, key=score_entry, reverse=True)
-        
+
         buffer = []
         total_chars = 0
-        MAX_CHARS = 8000  # ULTRA reduced for speed
-        MAX_FILES = 3  # Only 3 most relevant files
+        MAX_CHARS = 8000
+        MAX_FILES = 3
 
         files_included = 0
         for entry in sorted_entries:
-            if entry.is_dir:
+            if getattr(entry, "is_dir", False):
                 continue
-            
+
             if files_included >= MAX_FILES:
                 break
-            
-            # Hard skip large files (aggressive)
-            if entry.size_bytes > 20000:  # Very aggressive filtering
+
+            size = _get_size(entry)
+            # Hard skip very large files
+            if size > 20000:
                 continue
-            
+
             # Skip low-score files entirely
             if score_entry(entry) < 0:
                 continue
-            
+
             try:
                 content, is_text = read_project_file(project_path, entry.path)
                 if is_text:
-                    text = content.decode("utf-8")
-                    
+                    text = content.decode('utf-8', errors='replace')
+
                     # Skip map files and lock files content unless explicitly asked
-                    if ("lock" in entry.path or entry.path.endswith(".map") or "node_modules" in entry.path):
+                    if ("lock" in entry.path or entry.path.endswith('.map') or "node_modules" in entry.path):
                         continue
 
                     if total_chars + len(text) > MAX_CHARS:
-                        # Truncate instead of skipping completely
                         remaining = MAX_CHARS - total_chars
-                        if remaining > 500:  # At least show something
+                        if remaining > 500:
                             buffer.append(f"--- FILE: {entry.path} (truncated) ---\n{text[:remaining]}...")
                             files_included += 1
                         break
@@ -311,11 +332,12 @@ class RefactorAgent:
                         total_chars += len(text)
                         files_included += 1
             except Exception:
+                # Ignore read errors per-file
                 pass
-        
+
         if not buffer:
             return "--- No relevant files found in project ---"
-        
+
         return "\n\n".join(buffer)
 
     def _detect_intent(self, message: str) -> str:

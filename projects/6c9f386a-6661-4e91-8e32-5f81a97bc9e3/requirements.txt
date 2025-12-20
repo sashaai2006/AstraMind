@@ -1,5 +1,0 @@
-fastapi
-sqlite3
-pydantic
-python-jose
-passlib

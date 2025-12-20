@@ -24,3 +24,45 @@ data/
 *_fixed.py
 commit_payload.json
 .DS_Store
+projects/*.db
+
+# Build & distribution artifacts
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+*.whl
+*.egg
+*.so
+*.pyd
+
+# Python tooling
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.tox/
+*.log
+
+# IDEs & editors
+.vscode/
+.idea/
+*.iml
+
+# Node & JS
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.pnpm/
+coverage/
+.cache/
+
+# Docker & env local
+docker-compose.override.yml
+.env.local
+
+# OS files
+Thumbs.db
+ehthumbs.db

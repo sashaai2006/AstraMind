@@ -1,5 +1,0 @@
-{
-  "title": "Test API",
-  "description": "Create a minimal FastAPI backend with /api/health returning {\"status\":\"ok\"}. Use SQLite and Pydantic schemas. Keep it simple.",
-  "target": "api"
-}

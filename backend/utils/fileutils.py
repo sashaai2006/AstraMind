@@ -11,31 +11,38 @@ class FileEntry:
         self.path = path
         self.is_dir = is_dir
 
-def iter_file_entries(project_path: Path) -> List[FileEntry]:
-    """Iterate over all files in a project directory."""
+def iter_file_entries(project_path: Path):
+    """Lazily iterate over all files in a project directory.
+
+    Yields `FileEntry` objects. Prefer using `itertools.islice` on the
+    generator if you only need the first N entries to avoid scanning the
+    entire tree.
+    """
     from backend.utils.logging import get_logger
     logger = get_logger(__name__)
-    
-    entries = []
+
     if not project_path.exists():
         logger.warning("iter_file_entries: project_path does not exist: %s", project_path)
-        return entries
-    
+        return
+
     # Files and directories to ignore
     IGNORE_DIRS = {'__pycache__', '.git', '.svn', '.hg', 'node_modules', '.venv', 'venv', '.idea', '.vscode'}
     IGNORE_EXTENSIONS = {'.pyc', '.pyo', '.pyd', '.so', '.dll', '.dylib', '.class'}
-    
+
     logger.debug("iter_file_entries: scanning %s", project_path)
     for root, dirs, files in os.walk(project_path):
         # Filter out ignored directories in-place
         dirs[:] = [d for d in dirs if d not in IGNORE_DIRS and not d.startswith('.')]
-        
+
         root_path = Path(root)
-        rel_root = root_path.relative_to(project_path)
-        
+        try:
+            rel_root = root_path.relative_to(project_path)
+        except Exception:
+            rel_root = Path('.')
+
         for d in dirs:
-            entries.append(FileEntry(str(rel_root / d), is_dir=True))
-        
+            yield FileEntry(str(rel_root / d), is_dir=True)
+
         for f in files:
             if f.startswith('.'):
                 continue
@@ -43,10 +50,30 @@ def iter_file_entries(project_path: Path) -> List[FileEntry]:
             file_ext = Path(f).suffix
             if file_ext in IGNORE_EXTENSIONS:
                 continue
-            entries.append(FileEntry(str(rel_root / f), is_dir=False))
-    
-    logger.debug("iter_file_entries: found %d entries in %s", len(entries), project_path)
-    return entries
+            yield FileEntry(str(rel_root / f), is_dir=False)
+
+
+# Simple in-memory metadata cache for file sizes. The cache stores
+# entries as {full_path: (mtime, size_bytes)} and will refresh when the
+# file mtime changes.
+_metadata_cache: dict = {}
+
+def get_file_size_cached(project_path: Path, rel_path: str) -> int:
+    full = (project_path / rel_path).resolve()
+    key = str(full)
+    try:
+        stat = full.stat()
+        mtime = int(stat.st_mtime)
+        size = int(stat.st_size)
+    except Exception:
+        return 0
+
+    cached = _metadata_cache.get(key)
+    if cached and cached[0] == mtime:
+        return cached[1]
+
+    _metadata_cache[key] = (mtime, size)
+    return size
 
 def read_project_file(project_path: Path, file_path: str) -> Tuple[bytes, bool]:
     """Read a file from a project. Returns (data, is_text)."""

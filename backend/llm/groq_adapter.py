@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import asyncio
 from typing import Optional
 
 import logging
@@ -20,9 +21,12 @@ from .adapter import BaseLLMAdapter
 
 LOGGER = get_logger(__name__)
 
+# In-memory dedupe for concurrent identical requests to avoid duplicate LLM calls
+_pending_requests: dict = {}
+
 class GroqLLMAdapter(BaseLLMAdapter):
 
-    def __init__(self, model: str = "llama-3.1-8b-instant"):
+    def __init__(self, model: str = "llama-3.3-70b-versatile"):
         from backend.settings import get_settings
         settings = get_settings()
         api_key = settings.groq_api_key or os.getenv("GROQ_API_KEY")
@@ -53,30 +57,45 @@ class GroqLLMAdapter(BaseLLMAdapter):
             LOGGER.info("Returning cached response")
             return cached
         
+        # Dedupe concurrent identical requests
+        dedupe_key = f"{json_mode}:{cache_key or prompt}"
+        loop = asyncio.get_running_loop()
+        pending = _pending_requests.get(dedupe_key)
+        if pending:
+            # Await existing result
+            return await pending
+
+        future = loop.create_future()
+        _pending_requests[dedupe_key] = future
         try:
-            result = await self._invoke(prompt, json_mode=json_mode)
+            try:
+                result = await self._invoke(prompt, json_mode=json_mode)
+            except BadRequestError as exc:
+                LOGGER.error("Groq bad request (json_mode=%s): %s", json_mode, exc)
+                if json_mode:
+                    LOGGER.warning("Falling back to text mode (json_mode=False) due to bad request.")
+                    result = await self._invoke(prompt, json_mode=False)
+                else:
+                    future.set_exception(exc)
+                    raise
+            except (AuthenticationError, PermissionDeniedError) as exc:
+                LOGGER.critical("Groq authentication/permission error: %s. Check your GROQ_API_KEY.", exc)
+                future.set_exception(exc)
+                raise  # Do not retry
+            except Exception as exc:
+                LOGGER.error("Groq request failed: %s", exc)
+                future.set_exception(exc)
+                raise
+
+            # Success: cache and set result
             if cache_key:
                 set_cached_by_key(cache_key, result)
             else:
                 set_cached(prompt, result, json_mode)
+            future.set_result(result)
             return result
-        except BadRequestError as exc:
-            LOGGER.error("Groq bad request (json_mode=%s): %s", json_mode, exc)
-            if json_mode:
-                LOGGER.warning("Falling back to text mode (json_mode=False) due to bad request.")
-                result = await self._invoke(prompt, json_mode=False)
-                if cache_key:
-                    set_cached_by_key(cache_key, result)
-                else:
-                    set_cached(prompt, result, json_mode)
-                return result
-            raise
-        except (AuthenticationError, PermissionDeniedError) as exc:
-            LOGGER.critical("Groq authentication/permission error: %s. Check your GROQ_API_KEY.", exc)
-            raise  # Do not retry
-        except Exception as exc:
-            LOGGER.error("Groq request failed: %s", exc)
-            raise
+        finally:
+            _pending_requests.pop(dedupe_key, None)
 
     async def _invoke(self, prompt: str, json_mode: bool) -> str:
         LOGGER.info("Calling Groq with model '%s' (json_mode=%s)", self.model, json_mode)
@@ -104,7 +123,7 @@ class GroqLLMAdapter(BaseLLMAdapter):
                 },
             ],
             model=self.model,
-            temperature=self.temperature,  # Lower for 70B (already very creative)
+            temperature= 0.15,  # Lower for 70B (already very creative)
             max_tokens=32000,  # Max for llama-3.3-70b (supports 32K)
             response_format=response_format,
         )

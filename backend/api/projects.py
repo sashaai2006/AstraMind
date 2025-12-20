@@ -249,7 +249,7 @@ async def list_files(project_id: UUID) -> List[FileEntry]:
     project_path = _project_path(project_id)
     if not project_path.exists():
         raise HTTPException(status_code=404, detail="Project not found")
-    entries = fileutils.iter_file_entries(project_path)
+    entries = list(fileutils.iter_file_entries(project_path))
     LOGGER.info("list_files: project_id=%s, project_path=%s, found %d entries", project_id, project_path, len(entries))
     result = [FileEntry(path=entry.path, is_dir=entry.is_dir) for entry in entries]
     LOGGER.debug("list_files: returning %d files: %s", len(result), [e.path for e in result[:10]])
