@@ -32,6 +32,7 @@ class GroqLLMAdapter(BaseLLMAdapter):
             raise RuntimeError("Groq API key is required. Set the GROQ_API_KEY environment variable or define groq_api_key in the project's .env file.")
         self.client = AsyncGroq(api_key=api_key)
         self.model = model
+        
 
     @retry(
         retry=retry_if_exception_type((RateLimitError, InternalServerError, APIConnectionError)),
@@ -103,7 +104,7 @@ class GroqLLMAdapter(BaseLLMAdapter):
                 },
             ],
             model=self.model,
-            temperature=0.2,  # Lower for 70B (already very creative)
+            temperature=self.temperature,  # Lower for 70B (already very creative)
             max_tokens=32000,  # Max for llama-3.3-70b (supports 32K)
             response_format=response_format,
         )
