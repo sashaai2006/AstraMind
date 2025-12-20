@@ -1,0 +1,1 @@
+from pydantic import BaseModel\n\nclass User(BaseModel):\n    id: int\n    name: str\n    email: str\n\nclass UserCreate(User):\n    password: str\n\nclass UserUpdate(User):\n    name: str\n    email: str
